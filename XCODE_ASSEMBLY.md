@@ -133,7 +133,7 @@ Launch the app bundle—not the inner executable—using:
 open "$KIT_ROOT/XcodeProject/DerivedData/Build/Products/Debug/ExitIPMonitor.app"
 ```
 
-The app bundle can be copied to `~/Applications` for a personal local copy, but the default generator output is unsigned. It is appropriate for local testing, not normal installation or distribution. macOS may ask you to approve opening it.
+The app bundle can be copied to `~/Applications` for a personal local copy. The default generator output is ad-hoc signed with no developer team, and the app runs unsandboxed, which is fine for local testing. To install on another Mac, run `bash Scripts/package-release.sh` and follow README → *Install on another Mac*. Use `brew install --cask jxz345/tap/exit-ip-monitor`, open the `.pkg` (approve it once with **Open Anyway**), or run `bash ~/Downloads/install.sh` with the downloaded `.pkg`.
 
 An Apple developer team and registered App Group are required for the full feature set: the app, widget extension, and Control Center control use the shared App Group state. Without a team-backed App Group, the menu-bar app (including the allowlist warning) can run as an unsigned local test, but the widget and Control Center control cannot read its data. See Apple’s [App Group documentation](https://developer.apple.com/documentation/xcode/configuring-app-groups).
 

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Installer package preinstall: quit a running Exit IP Monitor so Installer can replace it.
+pkill -x ExitIPMonitor 2>/dev/null
+i=0
+while pgrep -x ExitIPMonitor >/dev/null && [ "$i" -lt 10 ]; do
+    sleep 0.5
+    i=$((i + 1))
+done
+pkill -9 -x ExitIPMonitor 2>/dev/null
+exit 0

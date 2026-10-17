@@ -25,4 +25,6 @@ public enum ExitIPPreferenceKey {
     public static let lookupBudget = "exit-ip.lookup-budget.v1"
     public static let providerHealthPrefix = "exit-ip.provider-health.v1."
     public static let diagnostics = "exit-ip.diagnostics.v1"
+    /// Set once the dashboard has been shown on the app's first launch.
+    public static let firstLaunchDashboardShown = "exit-ip.first-launch-dashboard-shown.v1"
 }

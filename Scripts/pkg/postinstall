@@ -1,0 +1,19 @@
+#!/bin/sh
+# Installer package postinstall: launch the installed app for the logged-in user. Its dashboard
+# opens on first launch. Installer passes the install destination (e.g. /Applications) as $2.
+# Never fails the installation.
+app="$2/ExitIPMonitor.app"
+[ -d "$app" ] || app="${3%/}/Applications/ExitIPMonitor.app"
+[ -d "$app" ] || exit 0
+xattr -dr com.apple.quarantine "$app" 2>/dev/null
+
+if [ "$(id -u)" -eq 0 ]; then
+    user="$(stat -f %Su /dev/console)"
+    case "$user" in
+        ""|root|loginwindow) exit 0 ;;
+    esac
+    launchctl asuser "$(id -u "$user")" sudo -u "$user" open "$app" 2>/dev/null
+else
+    open "$app" 2>/dev/null
+fi
+exit 0

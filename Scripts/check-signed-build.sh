@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Inspect a built app's signing, App Group entitlement, and embedded widget extension.
+# Inspect a built app's signing, architectures, App Group entitlement, and embedded widget extension.
 # This is read-only: it never changes signing settings or profiles.
 #
 #   bash Scripts/check-signed-build.sh [path/to/ExitIPMonitor.app]
@@ -32,16 +32,35 @@ printf 'App: %s\n' "$APP_PATH"
 if codesign --verify --deep --strict "$APP_PATH" >/dev/null 2>&1; then
     pass "Code signature verifies"
 else
-    warn "Code signature does not verify (the default generator build is unsigned)"
+    warn "Code signature does not verify"
+fi
+
+signature_info="$(codesign -dvv "$APP_PATH" 2>&1 || true)"
+if grep -q 'linker-signed' <<<"$signature_info" || grep -q 'Sealed Resources=none' <<<"$signature_info"; then
+    fail "Only a linker signature (bundle not sealed): another Mac reports this app as damaged. Use Scripts/package-release.sh"
+elif grep -q 'Signature=adhoc' <<<"$signature_info"; then
+    pass "Ad-hoc signed, bundle sealed (install on another Mac with the .pkg or install.sh from package-release.sh)"
+elif authority="$(grep -m1 '^Authority=' <<<"$signature_info")"; then
+    pass "Signed by ${authority#Authority=}"
+fi
+
+app_binary="$APP_PATH/Contents/MacOS/ExitIPMonitor"
+if archs="$(lipo -archs "$app_binary" 2>/dev/null)"; then
+    if [[ " $archs " == *" arm64 "* && " $archs " == *" x86_64 "* ]]; then
+        pass "Universal binary ($archs)"
+    else
+        warn "Binary architectures: $archs (not universal: Macs with another architecture cannot run it)"
+    fi
 fi
 
 entitlements_file="$(mktemp -t exit-ip-entitlements).plist"
 trap 'rm -f "$entitlements_file"' EXIT
 if codesign -d --entitlements :- "$APP_PATH" >"$entitlements_file" 2>/dev/null && [[ -s "$entitlements_file" ]] && plutil -lint "$entitlements_file" >/dev/null 2>&1; then
     pass "Readable app entitlements"
-    app_groups="$(plutil -extract 'com.apple.security.application-groups' xml1 -o - "$entitlements_file" 2>/dev/null || true)"
+    # plutil -extract treats dots as key-path separators, so read the array with PlistBuddy.
+    app_groups="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups' "$entitlements_file" 2>/dev/null || true)"
     if [[ -z "$app_groups" ]]; then
-        warn "App Group entitlement is missing"
+        warn "App Group entitlement is missing (expected for ad-hoc builds: the widget cannot read app data)"
     elif grep -q 'group.com.example.exitipmonitor' <<<"$app_groups"; then
         warn "App Group entitlement still uses the source-kit placeholder"
     elif grep -q 'group\.' <<<"$app_groups"; then
@@ -50,7 +69,7 @@ if codesign -d --entitlements :- "$APP_PATH" >"$entitlements_file" 2>/dev/null &
         warn "App Group entitlement does not contain a registered group identifier"
     fi
 else
-    warn "No readable signed entitlements were found"
+    warn "No readable signed entitlements were found (expected for ad-hoc builds: the app runs unsandboxed)"
 fi
 
 widget_bundle="$APP_PATH/Contents/PlugIns/ExitIPMonitorWidgets.appex"

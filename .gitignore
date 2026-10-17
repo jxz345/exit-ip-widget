@@ -5,3 +5,4 @@ XcodeProject/
 *.xcuserstate
 xcuserdata/
 swift-test.log
+dist/

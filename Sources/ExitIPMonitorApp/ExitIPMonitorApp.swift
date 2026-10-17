@@ -7,6 +7,20 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.monitor.start()
+        // The app is menu-bar only, and a crowded menu bar can hide its item, so the very first
+        // launch opens the dashboard once to show the app is running.
+        let defaults = ExitIPAppGroup.defaults
+        if !defaults.bool(forKey: ExitIPPreferenceKey.firstLaunchDashboardShown) {
+            defaults.set(true, forKey: ExitIPPreferenceKey.firstLaunchDashboardShown)
+            Self.showDashboard()
+        }
+    }
+
+    /// Opening the app again while it runs (Finder, Spotlight, Launchpad, `open`) shows the
+    /// dashboard instead of doing nothing visible.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Self.showDashboard()
+        return false
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

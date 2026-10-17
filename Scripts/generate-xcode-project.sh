@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Generates a self-contained Xcode project, copies the supplied sources into it,
-# runs the shared Swift package tests, and performs an unsigned compilation build.
+# runs the shared Swift package tests, and performs an unsigned compilation build
+# that is then ad-hoc signed (see Scripts/lib/adhoc-sign.sh).
 #
 # Usage:
 #   bash Scripts/generate-xcode-project.sh
@@ -388,7 +389,7 @@ if (( GENERATE_ONLY == 0 )); then
             -derivedDataPath "$PROJECT_DIR/DerivedData" \
             build
     else
-        printf 'Building without code signing. Use --signed-build with a registered App Group and Team ID before running on a Mac.\n'
+        printf 'Building without a signing identity, then ad-hoc signing. Use --signed-build with a registered App Group and Team ID for a team-signed app.\n'
         xcodebuild \
             -project "$XCODE_PROJECT" \
             -scheme ExitIPMonitor \
@@ -398,6 +399,9 @@ if (( GENERATE_ONLY == 0 )); then
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
+        # Replace the linker-only signature so the bundle survives a copy to another Mac.
+        source "$SCRIPT_DIR/lib/adhoc-sign.sh"
+        adhoc_sign_app "$APP_BUNDLE" "$PROJECT_DIR/Configuration/ExitIPMonitorWidgets.entitlements"
     fi
     printf 'PASS  Build completed.\n'
     if [[ -d "$APP_BUNDLE" && -x "$APP_EXECUTABLE" ]]; then
