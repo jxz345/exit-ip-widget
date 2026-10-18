@@ -14,7 +14,7 @@ The first release: a menu-bar app showing your public exit IP address and countr
 dashboard, settings, an exit-IP allowlist warning, an event log, a WidgetKit widget, and a macOS 26
 Control Center control. It also runs the Tailscale → Clash Verge provider and maintains the Clash
 Verge profile that uses it. It requires macOS 14 or later (the Control Center control needs
-macOS 26) and is universal: Apple silicon and Intel. This build is 1.0 (3); it replaces the previous 1.0 assets.
+macOS 26) and is universal: Apple silicon and Intel. This build is 1.0 (4); it replaces the previous 1.0 assets.
 
 ### Install
 
@@ -34,25 +34,28 @@ The app is ad-hoc signed (not notarized), and Homebrew keeps the download quaran
 approve the first launch in **System Settings → Privacy & Security → Open Anyway**. The
 dashboard opens on first launch, and the country flag is in the menu bar.
 
-If the launch hangs (the process starts but no flag appears) or **Open Anyway** is missing or
-does nothing, which happens on macOS 27, first close any "ExitIPMonitor" Not Opened dialog with
-**Done**. Later launches wait while that dialog or a stuck evaluation is pending. Then quit the
-app, verify it, and remove quarantine for this app only:
+Build 3 resolved the observed pre-startup stall through a fresh verified release and normal
+macOS approval, with quarantine retained. Build 4 preserves that behavior. After approval,
+verify readiness with:
 
 ```sh
-pkill -x ExitIPMonitor
-codesign --verify --deep --strict --verbose=2 /Applications/ExitIPMonitor.app
-xattr -dr com.apple.quarantine /Applications/ExitIPMonitor.app
-open /Applications/ExitIPMonitor.app
+/bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/diagnose-launch.sh --launch --timeout 60
 ```
-
-If it still hangs, restart the Mac (this ends any pending evaluation) and open the app again.
-If `xattr` reports **Operation not permitted**, allow your terminal (Terminal, or Visual
-Studio Code) under **Privacy & Security → App Management**, then retry.
 
 Without Homebrew, double-click `ExitIPMonitor-1.0.pkg` (approve it once with **Open
 Anyway**), or run
 `curl -fsSL https://github.com/jxz345/exit-ip-widget/releases/latest/download/install.sh | bash`.
+
+### Dashboard provider installation
+
+- Missing or incomplete daemon setup now stays visible with **Install Provider**; profile
+  editing and import instructions remain available instead of disappearing.
+- The button uses native macOS administrator authentication, as Sleepless does, and runs
+  setup off the main thread. Success requires both background services loaded.
+- Progress, cancellation, failures, retry, installer output, and a local diagnostic log are
+  shown in the dashboard; installation lifecycle events also appear in the Event Log.
+- README records the verified launch solution and explains why the old dashboard hid the
+  Clash Verge controls after an incomplete daemon reinstall.
 
 ### Installation diagnostics
 

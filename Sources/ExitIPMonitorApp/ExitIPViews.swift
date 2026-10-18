@@ -177,6 +177,7 @@ struct StatusPopoverView: View {
 
 struct DashboardView: View {
     @ObservedObject var monitor: PublicIPMonitor
+    @StateObject private var daemon = DaemonInstallationModel()
     @State private var allowedIPInput = ""
     @State private var allowedIPStatus: String?
 
@@ -259,7 +260,7 @@ struct DashboardView: View {
         }
     }
 
-    /// The exit IP itself, the allowlist that judges it, and (with the Tailscale daemon) the profile.
+    /// The exit IP, allowlist, and saved profile remain available during daemon setup.
     private var leftColumn: some View {
         VStack(alignment: .leading, spacing: 16) {
             if let snapshot = monitor.snapshot {
@@ -325,9 +326,7 @@ struct DashboardView: View {
                 GroupCaption("Warns when a verified exit IP isn't listed. An empty list turns warnings off.")
             }
 
-            if TailscaleVergeProvider.isInstalled() {
-                ClashVergeProfileSection()
-            }
+            ClashVergeProfileSection(providerInstalled: daemon.isInstalled)
         }
     }
 
@@ -337,10 +336,8 @@ struct DashboardView: View {
             DashboardGroup("Monitoring") {
                 MonitoringSummary(monitor: monitor)
             }
-            TailscaleVergeProviderSection()
-            if TailscaleVergeProvider.isInstalled() {
-                ClashVergeApplySteps()
-            }
+            TailscaleVergeProviderSection(installer: daemon)
+            ClashVergeApplySteps(providerInstalled: daemon.isInstalled)
         }
     }
 
@@ -744,78 +741,108 @@ private struct MonitoringSummary: View {
     }
 }
 
-/// Shown only while the optional Tailscale → Clash Verge daemon is installed (Sources/ExitIPDaemon):
-/// where the provider file Clash reads lives, and where it is served. Reads the daemon's state file
-/// every 2 seconds while visible; the app makes no request to the daemon.
+/// Always visible: offers installation when missing and repair after incomplete setup.
+/// Reads the provider state every two seconds; the app never sends proxy data to the daemon.
 private struct TailscaleVergeProviderSection: View {
-    @State private var installed = false
-    @State private var status: TailscaleVergeStatus?
+    @ObservedObject var installer: DaemonInstallationModel
 
     var body: some View {
-        // A VStack rather than a Group, so the polling task runs even while nothing is shown.
-        VStack(alignment: .leading, spacing: 0) {
-            if installed, let status {
-                DashboardGroup("Tailscale → Clash Verge provider") {
-                    DetailGrid {
-                        GridRow {
-                            DetailLabel(text: "Status")
-                            HStack(spacing: 4) {
-                                Label(status.summary, systemImage: status.isDirect ? "checkmark.circle" : "xmark.octagon")
-                                    .foregroundStyle(status.isDirect ? Color.primary : Color.orange)
-                                if let checkedAt = status.checkedAt {
-                                    Group {
-                                        Text("·")
-                                        Text(checkedAt, style: .relative)
-                                        Text("ago")
-                                    }
-                                    .foregroundStyle(.secondary)
+        DashboardGroup("Tailscale → Clash Verge provider") {
+            if installer.isInstalled, let status = installer.status {
+                DetailGrid {
+                    GridRow {
+                        DetailLabel(text: "Status")
+                        HStack(spacing: 4) {
+                            Label(status.summary, systemImage: status.isDirect ? "checkmark.circle" : "xmark.octagon")
+                                .foregroundStyle(status.isDirect ? Color.primary : Color.orange)
+                            if let checkedAt = status.checkedAt {
+                                Group {
+                                    Text("·")
+                                    Text(checkedAt, style: .relative)
+                                    Text("ago")
                                 }
-                            }
-                        }
-                        PathRow(label: "Provider file", value: TailscaleVergeProvider.providerFileURL.path) {
-                            Button("Open") { openInTextEdit(TailscaleVergeProvider.providerFileURL) }
-                            Button("Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([TailscaleVergeProvider.providerFileURL])
-                            }
-                        }
-                        PathRow(label: "Served at", value: TailscaleVergeProvider.providerURL.absoluteString) {
-                            Button("Browser") { NSWorkspace.shared.open(TailscaleVergeProvider.providerURL) }
-                            Button("JSON") { NSWorkspace.shared.open(TailscaleVergeProvider.statusURL) }
-                        }
-                        GridRow(alignment: .top) {
-                            DetailLabel(text: "Clash Verge")
-                            if let vergeURL = ClashVergeApp.url {
-                                HStack(spacing: 8) {
-                                    Text("Installed")
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    Button("Open") { ClashVergeApp.open(vergeURL) }
-                                        .controlSize(.small)
-                                }
-                            } else {
-                                Text(ClashVergeApp.missingNote)
-                                    .foregroundStyle(.orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                .foregroundStyle(.secondary)
                             }
                         }
                     }
-                    GroupCaption("The provider file is never imported: your profile's tailscale-live provider fetches it every 3 seconds.")
+                    PathRow(label: "Provider file", value: TailscaleVergeProvider.providerFileURL.path) {
+                        Button("Open") { openInTextEdit(TailscaleVergeProvider.providerFileURL) }
+                        Button("Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([TailscaleVergeProvider.providerFileURL])
+                        }
+                    }
+                    PathRow(label: "Served at", value: TailscaleVergeProvider.providerURL.absoluteString) {
+                        Button("Browser") { NSWorkspace.shared.open(TailscaleVergeProvider.providerURL) }
+                        Button("JSON") { NSWorkspace.shared.open(TailscaleVergeProvider.statusURL) }
+                    }
+                    GridRow(alignment: .top) {
+                        DetailLabel(text: "Clash Verge")
+                        if let vergeURL = ClashVergeApp.url {
+                            HStack(spacing: 8) {
+                                Text("Installed")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button("Open") { ClashVergeApp.open(vergeURL) }
+                                    .controlSize(.small)
+                            }
+                        } else {
+                            Text(ClashVergeApp.missingNote)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
                 }
+                GroupCaption("The provider file is never imported: your profile's tailscale-live provider fetches it every 3 seconds.")
+            } else {
+                Label(installer.monitorInstalled || installer.responderInstalled
+                      ? "Background provider setup is incomplete"
+                      : "Background provider is not installed", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                GroupCaption("Install the background provider to enable Tailscale routing in Clash Verge. Your saved profile stays available.")
+            }
+
+            if installer.isInstalling {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Installing provider…")
+                }
+            } else if !installer.isInstalled || installer.hasError {
+                Button(installer.hasError ? "Retry Installation" : "Install Provider") {
+                    installer.install()
+                }
+                .buttonStyle(.borderedProminent)
+                .help("macOS will ask for administrator authentication to install the background services.")
+            }
+            if let message = installer.message {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(installer.hasError ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !installer.details.isEmpty {
+                DisclosureGroup("Installation details") {
+                    ScrollView {
+                        Text(installer.details)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 180)
+                }
+            }
+            if let logURL = installer.diagnosticURL {
+                Button("Show Installation Log") {
+                    NSWorkspace.shared.activateFileViewerSelecting([logURL])
+                }
+                .controlSize(.small)
             }
         }
         .task {
             while !Task.isCancelled {
-                reload()
+                installer.reload()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
-    }
-
-    private func reload() {
-        installed = TailscaleVergeProvider.isInstalled()
-        guard installed else { status = nil; return }
-        let text = try? String(contentsOf: TailscaleVergeProvider.stateFileURL, encoding: .utf8)
-        status = TailscaleVergeStatus.evaluate(stateText: text, now: Date())
     }
 }
 
@@ -823,6 +850,7 @@ private struct TailscaleVergeProviderSection: View {
 /// and the app writes ~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml (0600) for
 /// you to import into Clash Verge as its one Local profile. Nothing here writes into Clash Verge.
 private struct ClashVergeProfileSection: View {
+    let providerInstalled: Bool
     @State private var name = ""
     @State private var type: ClashProxySettings.ProxyType = .socks5
     @State private var server = ""
@@ -836,6 +864,9 @@ private struct ClashVergeProfileSection: View {
 
     var body: some View {
         DashboardGroup("Clash Verge profile") {
+            if !providerInstalled {
+                GroupCaption("You can save your profile now. Install the background provider on the right before using Tailscale routing.")
+            }
             DetailGrid {
                 GridRow {
                     DetailLabel(text: "Name")
@@ -981,8 +1012,14 @@ private enum ClashVergeApp {
 /// How to apply the app's profile in Clash Verge Rev, with the labels Clash Verge itself uses. The
 /// provider file is never imported: the profile's proxy-providers entry fetches it.
 private struct ClashVergeApplySteps: View {
+    let providerInstalled: Bool
     var body: some View {
         DashboardGroup("Apply in Clash Verge") {
+            if !providerInstalled {
+                Label("Install the background provider above before applying the profile.", systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+            }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 5) {
                 step(1, "Save Profile (left) writes the profile file.")
                 step(2, "Clash Verge → Profiles → New. In Create Profile, set Type to Local, Choose File → clash-verge-profile.yaml, then Save.")
