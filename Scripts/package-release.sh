@@ -12,6 +12,11 @@
 # install.sh (from Scripts/install-release.sh) installs the app from the downloaded
 # .pkg without Installer or Gatekeeper, or downloads the .pkg from the GitHub release
 # v<version> of the origin remote (set EXIT_IP_RELEASE_REPO=owner/repo to override).
+#
+# Publish releases from .github/workflows/release.yml (push a v<version> tag), not from a
+# local run: on a developer Mac, files can carry that Mac's com.apple.provenance stamp, which
+# stalls the app's launch on every other Mac. The script warns locally and fails in CI when
+# the zip or package carries extended attributes.
 
 set -euo pipefail
 
@@ -23,7 +28,7 @@ DIST_DIR="$KIT_ROOT/dist"
 APP_BUNDLE="$DERIVED_DATA/Build/Products/Release/ExitIPMonitor.app"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    sed -n '2,14p' "$0"
+    sed -n '2,19p' "$0"
     exit 0
 fi
 
@@ -68,8 +73,8 @@ zip_path="$DIST_DIR/ExitIPMonitor-$version.zip"
 rm -f "$pkg_path" "$zip_path" "$DIST_DIR/SHA256SUMS" "$DIST_DIR"/ExitIPMonitor-*.dmg
 
 # App zip for the Homebrew cask (jxz345/tap/exit-ip-monitor). ditto keeps the signature
-# intact; Finder's zip or `zip -r` can break it.
-ditto -c -k --keepParent "$APP_BUNDLE" "$zip_path"
+# intact; Finder's zip or `zip -r` can break it. No extended attributes: see the check below.
+ditto -c -k --norsrc --noextattr --keepParent "$APP_BUNDLE" "$zip_path"
 
 # Installer package. Installer does not quarantine what it installs, so after the one
 # Gatekeeper approval of the package, the app launches without a second prompt.
@@ -131,6 +136,26 @@ else
     printf 'WARN  No GitHub origin remote; skipping install.sh (set EXIT_IP_RELEASE_REPO=owner/repo).\n'
 fi
 
+# Released files must carry no extended attributes. A process macOS tracks stamps every file it
+# writes with this Mac's com.apple.provenance, a key into this Mac's Gatekeeper database. On
+# another Mac the key is foreign, `xattr -d` cannot remove it (the kernel manages it), and the
+# app stalls at launch even after quarantine removal. Archives keep attributes as AppleDouble
+# "._" entries; the pkg payload can't be cleaned here because the staged copy is re-stamped.
+apple_double='(^|/)\._|^__MACOSX/'
+stamped=()
+(( $(zipinfo -1 "$zip_path" | grep -cE "$apple_double" || true) == 0 )) || stamped+=("$(basename "$zip_path")")
+(( $(pkgutil --payload-files "$pkg_path" | grep -cE "$apple_double" || true) == 0 )) || stamped+=("$(basename "$pkg_path")")
+if (( ${#stamped[@]} > 0 )); then
+    if [[ "${CI:-}" == "true" ]]; then
+        printf 'ERROR Extended attributes (AppleDouble entries) in: %s\n' "${stamped[*]}" >&2
+        exit 1
+    fi
+    printf 'WARN  Extended attributes, likely this Mac'"'"'s provenance stamps, in: %s\n' "${stamped[*]}"
+    printf '      Use these files only on this Mac; publish releases from .github/workflows/release.yml.\n'
+else
+    printf 'PASS  No extended attributes in the zip or package.\n'
+fi
+
 (
     cd "$DIST_DIR"
     artifacts=("$(basename "$pkg_path")" "$(basename "$zip_path")")
@@ -140,6 +165,8 @@ fi
 
 printf '\nSUCCESS\n'
 cat "$DIST_DIR/SHA256SUMS"
-printf '\nAttach every file in %s to the GitHub release v%s, then set the cask\n' "$DIST_DIR" "$version"
-printf '(jxz345/homebrew-tap Casks/exit-ip-monitor.rb) to:\n'
+printf '\nCask values for jxz345/homebrew-tap Casks/exit-ip-monitor.rb:\n'
 printf '  version "%s"\n  sha256 "%s"\n' "$version" "$(shasum -a 256 "$zip_path" | awk '{print $1}')"
+if [[ "${CI:-}" != "true" ]]; then
+    printf 'To publish, push the tag v%s; .github/workflows/release.yml builds and uploads on a clean runner.\n' "$version"
+fi

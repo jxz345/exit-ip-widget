@@ -36,6 +36,20 @@ open /Applications/ExitIPMonitor.app
 
 If `xattr` reports **Operation not permitted**, allow the app running the command (Terminal, or Visual Studio Code for its terminal) under **Privacy & Security → App Management**, then retry. This follows the approach of [Sleepless](https://github.com/jxz345/Sleepless), whose UPDATE_NOTES §8 records the investigation.
 
+If the app still hangs after those commands, check whether the copy carries another Mac's provenance stamp:
+
+```sh
+xattr -px com.apple.provenance /Applications/ExitIPMonitor.app/Contents/MacOS/ExitIPMonitor
+```
+
+**`com.apple.provenance`** is a key into a Mac's own Gatekeeper database, and the kernel won't let `xattr` remove it. If a value prints, that copy came from an early build of v1.0 that was made on a developer Mac. On other Macs, that build's stamp stalled the launch however it was installed. To replace it:
+
+1. Run `brew uninstall --cask jxz345/tap/exit-ip-monitor`, and delete any other copies.
+2. Restart the Mac. This clears the stuck launch.
+3. Run `brew update && brew install --cask jxz345/tap/exit-ip-monitor`.
+
+Current releases are built on a clean GitHub runner and carry no stamps.
+
 If macOS says the app **is damaged and can't be opened**, the copy predates the current release and has only a partial signature. Install the current release.
 
 ### Without Homebrew
@@ -93,7 +107,7 @@ The implementation follows Apple’s Liquid Glass guidance for macOS 26+ without
 | **Settings window** | Opened from the **gear** button in the menu-bar popover or the **Settings** button in the dashboard; a retained AppKit window (like the dashboard) so it reliably comes to the front. Sections: **Menu bar** display style, **Change attention** highlights, **Startup** (Launch at login + Open Login Items Settings), **Refresh** frequency, **IP location service** (provider pool, per-provider health and a **Test** action that checks exactly that provider—skipped, not redirected, while it is paused or out of daily budget, IPinfo Lite token in Keychain; without a token IPinfo Lite is skipped and its health line says so), and **Diagnostics** (clear indicators, redacted logs with configurable retention). Debug builds also expose in-memory failure simulations for manual QA. |
 | **Exit-IP allowlist warning** | The dashboard holds exact IPv4/IPv6 addresses you expect to exit from (empty list = no warnings). When a fresh, successful lookup returns an address outside the list, an **Exit IP Not Allowed** warning window opens once per address, and the popover and dashboard show an orange **Exit IP not on the allowlist** notice. The app **only warns**: it never blocks or changes networking, and the menu bar keeps showing the country. Failed lookups never warn. See [allowlist details](#exit-ip-allowlist-warning). |
 | **Refresh engine** | Checks immediately on launch; offers an opt-in **Launch at login** setting (in the dashboard's Monitoring group and Settings → Startup); refreshes after any network-environment change (gateway/default route, routing table including TUN split routes, interface or address, proxy, DNS, VPN/tunnel), system wake, screen wake, session activation, and app activation; supports explicit **Refresh now** buttons; uses a true 15-minute default cadence; persists the last successful result; and balances promptness against provider quotas with **immediate-then-wait** event handling (the first network/system event is checked at once; further events in the next 5 seconds become one trailing lookup on the next provider in the pool) and a layered [lookup budget](#lookup-budget-prompt-checks-vs-api-limits): a hard five-second gap per provider, a 6-lookup burst allowance refilling one every 2 minutes that throttles only follow-ups (a storm lasting over 30 seconds, retries) and routine triggers—**a real network change is never queued behind it**—freshness skipping for routine triggers, per-provider daily budgets at 80% of documented limits, and cooldowns after rate-limit/quota/auth refusals (a paused provider is skipped by normal rotation; the refused request is never retried elsewhere, and a pause never hides the last verified location). `NWPathMonitor` updates that report an unchanged path are ignored. A newly started lookup supersedes any queued one. |
-| **Release packaging (install on another Mac)** | `Scripts/package-release.sh` builds a **universal** (Apple silicon + Intel) Release app and ad-hoc signs it so the whole bundle is sealed. It verifies the signature and writes the release assets to `dist/`: an **app zip**, an **Installer package** (`.pkg`), **`install.sh`**, and **`SHA256SUMS`**. Ad-hoc builds run the app **unsandboxed**, the way every linker-signed build already ran, because an ad-hoc signature can't authorize the App Group. The widget extension stays sandboxed and can't read the app's data. The default generator build is signed the same way. On another Mac, the recommended install is the **Homebrew cask** `brew install --cask jxz345/tap/exit-ip-monitor` (tap [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap), same approach as Sleepless). It keeps Homebrew's normal quarantine and prints an explicit, app-only recovery for the macOS 27 launch stall. Without Homebrew, double-click the `.pkg` (one **Open Anyway** approval). The package quits a running copy first and launches the new one, and Installer doesn't quarantine the installed app. Or run `bash ~/Downloads/install.sh`, which installs the app from the downloaded `.pkg` without Installer or Gatekeeper and prints diagnostics if it does not start. See [Install](#install). |
+| **Release packaging (install on another Mac)** | Pushing a `v<version>` tag runs `.github/workflows/release.yml` on a clean GitHub `macos-26` runner. It runs `Scripts/package-release.sh`, which builds a **universal** (Apple silicon + Intel) Release app and ad-hoc signs it so the whole bundle is sealed. The release gets an **app zip**, an **Installer package** (`.pkg`), **`install.sh`**, and **`SHA256SUMS`**, plus a Sigstore **build attestation** and notes from `CHANGELOG.md`. Release files must carry **no extended attributes**: a developer Mac's `com.apple.provenance` stamps would stall the launch on every other Mac. So the zip is made without them, and CI fails if any file has them. Ad-hoc builds run the app **unsandboxed**, the way every linker-signed build already ran, because an ad-hoc signature can't authorize the App Group. The widget extension stays sandboxed and can't read the app's data. The default generator build is signed the same way. Users install with the **Homebrew cask** `brew install --cask jxz345/tap/exit-ip-monitor` (tap [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap), same approach as Sleepless). It keeps Homebrew's normal quarantine and prints an explicit, app-only recovery for the macOS 27 launch stall. Without Homebrew, double-click the `.pkg` (one **Open Anyway** approval); it quits a running copy and launches the new one. Or use `install.sh`, which installs from the `.pkg` without Installer or Gatekeeper. See [Install](#install) and [Publishing a release](#publishing-a-release). |
 | **Privacy and resilience** | The selected provider sees the public IP address. Provider credentials are kept in the macOS Keychain; the widget receives only the non-secret snapshot through the App Group. |
 
 ## Exit-IP allowlist warning
@@ -244,10 +258,12 @@ exit-ip-widget/
 ├── Scripts/generate-xcode-project.sh   # Copies sources, creates Xcode project, builds, and logs
 ├── Scripts/check-refresh-log.sh        # Verifies from a runtime log that network changes refreshed promptly
 ├── Scripts/check-signed-build.sh       # Read-only signature, architecture, App Group, and widget-extension diagnostics
-├── Scripts/package-release.sh          # Universal Release build, ad-hoc sign, .pkg + install.sh into dist/
+├── Scripts/package-release.sh          # Universal Release build, ad-hoc sign, zip + .pkg + install.sh + SHA256SUMS into dist/
 ├── Scripts/pkg/                        # Installer package preinstall (quit running copy) / postinstall (launch app)
 ├── Scripts/install-release.sh          # Template for dist/install.sh: quarantine-free download, verify, install, launch
 ├── Scripts/lib/adhoc-sign.sh           # Shared inside-out ad-hoc signing helper
+├── .github/workflows/release.yml       # Builds, attests, and publishes a release from a v* tag on a clean runner
+├── CHANGELOG.md                        # Release notes; each version's section is published with its release
 ├── XCODE_ASSEMBLY.md              # Click-by-click project and target assembly guide
 └── Package.swift                 # Tests shared core without Xcode UI targets
 ```
@@ -339,18 +355,30 @@ open "$PWD/XcodeProject/DerivedData/Build/Products/Debug/ExitIPMonitor.app"
 
 ### Publishing a release
 
-```bash
-bash Scripts/package-release.sh            # accepts generator options such as --app-group ID
-```
+Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml) on a clean GitHub `macos-26` runner, never on a developer Mac. A process macOS tracks, such as an agent session or an app launched from one, stamps every file it writes with that Mac's `com.apple.provenance`. Those stamps travel inside the zip and the package. On every other Mac they stall the app's launch, and the quarantine recovery can't remove them. Sleepless's releases are built the same way.
 
-The script builds a universal Release app and ad-hoc signs it, with the app unsandboxed and the widget sandboxed. It verifies the signature, both architectures, and the packaged app, and writes to `dist/`:
+To publish version `<version>`:
 
-- `ExitIPMonitor-<version>.zip`, which the Homebrew cask installs;
+1. Add a `## [<version>]` section to [`CHANGELOG.md`](CHANGELOG.md); it becomes the release notes. The app's version is `MARKETING_VERSION` in `Scripts/generate-xcode-project.sh`.
+2. Commit, then push the tag: `git tag v<version> && git push origin v<version>`. To rebuild an existing tag, run the workflow from the Actions tab with that tag.
+3. The workflow builds and checks the release, then publishes it:
+   - it runs `Scripts/package-release.sh`, failing if any file carries extended attributes or the app's version doesn't match the tag;
+   - it signs a Sigstore build attestation for the zip and package;
+   - it publishes the release, with the notes plus verification commands.
+4. Copy `version` and `sha256` from the run's summary into [the cask](https://github.com/jxz345/homebrew-tap/blob/main/Casks/exit-ip-monitor.rb), run `brew style` and `brew audit --cask --online`, and push the tap. Every build has a new checksum, so the cask needs updating even when the same version is rebuilt.
+
+Anyone can verify a download with `shasum -a 256 -c SHA256SUMS` and `gh attestation verify ExitIPMonitor-<version>.zip -R jxz345/exit-ip-widget`.
+
+`Scripts/package-release.sh` also runs locally, for testing on this Mac. It accepts generator options such as `--app-group ID`. It builds a universal Release app and ad-hoc signs it, with the app unsandboxed and the widget sandboxed. It then verifies the signature, both architectures, and the packaged app, and writes to `dist/`:
+
+- `ExitIPMonitor-<version>.zip`, which the Homebrew cask installs. It is created without extended attributes;
 - `ExitIPMonitor-<version>.pkg`, the Installer package (scripts in `Scripts/pkg/`);
 - `install.sh`, which is `Scripts/install-release.sh` with the repository, version, and package SHA-256 filled in. The repository comes from the `origin` remote, or from `EXIT_IP_RELEASE_REPO=owner/repo`;
 - `SHA256SUMS`.
 
-Create the GitHub release `v<version>` with all four files. Then set `version` and `sha256` in [the cask](https://github.com/jxz345/homebrew-tap/blob/main/Casks/exit-ip-monitor.rb) to the values the script prints, and push the tap. Every build has a new checksum, so the cask needs updating even when the same version is published again. Only Developer ID signing plus notarization, which needs a paid developer team, removes the Gatekeeper approval described in [First launch](#first-launch).
+Locally, the script warns when the zip or package carries extended attributes. The package payload always does on a stamped Mac, because staged files are re-stamped. Don't publish those files.
+
+Only Developer ID signing plus notarization, which needs a paid developer team, removes the Gatekeeper approval described in [First launch](#first-launch).
 
 Inspect a built bundle before installing or requesting a signed build with the read-only diagnostics helper:
 
@@ -513,7 +541,7 @@ Changing a gateway, route, interface, system proxy, or enabling/disabling a TUN/
 
 | Check | Expected result |
 | --- | --- |
-| Install on another Mac | `bash Scripts/package-release.sh` reports PASS for the ad-hoc signature, both architectures, and the packaged app, and writes the zip, `.pkg`, `install.sh`, and `SHA256SUMS`. `bash Scripts/check-signed-build.sh XcodeProject/DerivedData-Release/Build/Products/Release/ExitIPMonitor.app` shows no FAIL. On a second Mac (Intel or Apple silicon), `brew install --cask jxz345/tap/exit-ip-monitor` verifies the zip, installs a strictly verifying, quarantined app, and prints the recovery caveats. After **Open Anyway**, or after the app-only recovery when the launch stalls at `_dyld_start`, the dashboard opens with a successful lookup. `brew uninstall` quits and removes it. The `.pkg` (after **Open Anyway**) and `bash ~/Downloads/install.sh` give the same result. |
+| Install on another Mac | The release workflow run for the tag succeeds. The published zip has no AppleDouble entries (`zipinfo -1 ExitIPMonitor-<version>.zip \| grep -c '\._'` prints `0`), and neither does the package payload (`pkgutil --payload-files`). `shasum -a 256 -c SHA256SUMS` and `gh attestation verify` pass. On a second Mac (Intel or Apple silicon), `brew install --cask jxz345/tap/exit-ip-monitor` installs a strictly verifying app. Its binary has no `com.apple.provenance` from another Mac, and the cask prints the recovery caveats. After **Open Anyway**, or after the app-only recovery when the launch stalls at `_dyld_start`, the dashboard opens with a successful lookup and the runtime log shows `monitor_started`. `brew uninstall` quits and removes the app. The `.pkg` (after **Open Anyway**) and `install.sh` give the same result. |
 | First launch and reopen | On a Mac that has never run the app, the first launch opens the dashboard. Quit and relaunch: only the menu-bar item appears. Open the app again from Finder while it runs: the dashboard comes forward. |
 | First launch | Menu label changes from `Locating` to the selected country display after an immediate check. Dashboard shows public IP, provider data, absolute **Last updated** time, and relative age. |
 | Menu settings | Switching among name, country code, flag, and flag+name immediately changes the menu-bar item; a stale result is labeled after twice the selected interval. |

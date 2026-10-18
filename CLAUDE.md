@@ -16,14 +16,20 @@ xcrun swift test --filter ExitIPSharedTests.ExitIPSharedTests/testCountryChangeC
 # Environment preflight (+ runs shared tests, writes swift-test.log)
 bash Scripts/check-build-environment.sh --test
 
-# Regenerate Xcode project, run tests, unsigned build; logs to XcodeProject/Logs/
+# Regenerate Xcode project, run tests, ad-hoc signed build; logs to XcodeProject/Logs/
 bash Scripts/generate-xcode-project.sh --force --open
 #   other flags: --skip-tests, --generate-only, --signed-build --team ID --app-group ID
 
 xcodebuild -project XcodeProject/ExitIPMonitor.xcodeproj -scheme ExitIPMonitor -destination 'platform=macOS' build
 open XcodeProject/DerivedData/Build/Products/Debug/ExitIPMonitor.app
+
+# Release: add a CHANGELOG.md section, then push the tag; .github/workflows/release.yml builds,
+# attests, and publishes on a clean runner. Then update the cask in jxz345/homebrew-tap.
+git tag v1.0 && git push origin v1.0
+bash Scripts/package-release.sh   # local test build into dist/ only
 ```
 
+- Never publish release files built on this Mac. Files written here can carry this Mac's `com.apple.provenance` stamp, which the kernel won't let `xattr` remove. The stamp travels in the zip/pkg and stalls the app's launch on every other Mac. `package-release.sh` warns locally and fails in CI when a file carries extended attributes.
 - When a SwiftPM build fails, the first `error:` line in `swift-test.log` is the actionable one; trailing `error: Build failed` is just a summary.
 - App/widget targets need full Xcode with the macOS 26 SDK; they are not in `Package.swift`. Deployment target is macOS 14; `ExitIPControl` is `@available(macOS 26.0, *)`.
 - No linter/formatter is configured.
