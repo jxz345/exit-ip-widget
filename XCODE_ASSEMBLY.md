@@ -1,23 +1,21 @@
 # Assemble Exit IP Monitor in Xcode
 
-This guide starts with the supplied `ExitIPMonitor-source-kit.zip` archive and ends with a runnable macOS menu-bar app, and WidgetKit extension (with the macOS 26 Control Center control). It assumes you have selected full Xcode with `xcode-select` and that the preflight check passes.
+This guide starts with a clone of [jxz345/exit-ip-widget](https://github.com/jxz345/exit-ip-widget) and ends with a runnable macOS menu-bar app, and WidgetKit extension (with the macOS 26 Control Center control). To install the released app instead, see the README's **Install** section. It assumes you have selected full Xcode with `xcode-select` and that the preflight check passes.
 
-> **Keep the supplied source kit intact.** The folder named `exit_ip_widget` is the source-kit root. The Xcode project references source files inside it; it must not create copied duplicates of those files.
+> **Keep the source kit intact.** The cloned folder `exit-ip-widget` is the source-kit root. The Xcode project references source files inside it; it must not create copied duplicates of those files.
 
 ---
 
-## 1. Extract the source kit and establish `KIT_ROOT`
+## 1. Clone the repository and establish `KIT_ROOT`
 
-Run these commands in Terminal. The archive name assumes a standard browser download; change only the `ARCHIVE` value if yours differs.
+Run these commands in Terminal:
 
 ```bash
-ARCHIVE="$HOME/Downloads/ExitIPMonitor-source-kit.zip"
-WORKSPACE="$HOME/Developer/ExitIPMonitor"
+mkdir -p "$HOME/Developer"
+cd "$HOME/Developer"
+git clone https://github.com/jxz345/exit-ip-widget.git
 
-mkdir -p "$WORKSPACE"
-unzip -q "$ARCHIVE" -d "$WORKSPACE"
-
-KIT_ROOT="$WORKSPACE/exit_ip_widget"
+KIT_ROOT="$HOME/Developer/exit-ip-widget"
 cd "$KIT_ROOT"
 test -f Package.swift && test -d Sources && test -d Tests && test -d Configuration
 printf 'Source-kit root: %s\n' "$KIT_ROOT"
@@ -26,8 +24,8 @@ printf 'Source-kit root: %s\n' "$KIT_ROOT"
 The resulting folder tree must begin as follows:
 
 ```text
-$HOME/Developer/ExitIPMonitor/
-└── exit_ip_widget/                 ← KIT_ROOT
+$HOME/Developer/
+└── exit-ip-widget/                 ← KIT_ROOT
     ├── Package.swift
     ├── Sources/
     │   ├── ExitIPShared/
@@ -66,14 +64,14 @@ At the end of every run it prints one of these paths:
 
 ```text
 SUCCESS
-Build log: /Users/you/Developer/ExitIPMonitor/exit_ip_widget/XcodeProject/Logs/generate-and-build-YYYYMMDD-HHMMSS-PID.log
+Build log: /Users/you/Developer/exit-ip-widget/XcodeProject/Logs/generate-and-build-YYYYMMDD-HHMMSS-PID.log
 ```
 
 or:
 
 ```text
 FAILED (exit N). Attach this file for diagnosis:
-/Users/you/Developer/ExitIPMonitor/exit_ip_widget/XcodeProject/Logs/generate-and-build-YYYYMMDD-HHMMSS-PID.log
+/Users/you/Developer/exit-ip-widget/XcodeProject/Logs/generate-and-build-YYYYMMDD-HHMMSS-PID.log
 ```
 
 If the script fails, attach that **one log file**. It includes the test output, generator output, and `xcodebuild` diagnostics.
@@ -296,7 +294,7 @@ At this point, the app target should contain no generated SwiftUI source files.
 
 ## 8. Add the supplied app and shared source files
 
-Choose **File → Add Files to “ExitIPMonitor”…**. Navigate from `XcodeProject` up one level to `exit_ip_widget`, then into `Sources`.
+Choose **File → Add Files to “ExitIPMonitor”…**. Navigate from `XcodeProject` up one level to `exit-ip-widget`, then into `Sources`.
 
 For every add-files operation below:
 

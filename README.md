@@ -4,6 +4,73 @@ A native **SwiftUI + WidgetKit** implementation kit for showing the current publ
 
 > **Platform boundary:** macOS Control Center supports third-party Control Widgets on **macOS 26+**, but Apple renders them as system-managed buttons/toggles rather than fully custom multi-line widgets. The tile can show a compact data-dense title, and at larger sizes the system shows title/value information. The richer multi-line inspection view belongs in the medium desktop/Notification Center widget, menu-bar popover, and dashboard. On older macOS versions, the menu bar and WidgetKit widget remain the appropriate system surfaces.
 
+## Install
+
+Exit IP Monitor runs on macOS 14 or later, on Apple silicon or Intel; the Control Center control needs macOS 26. Install it with [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask jxz345/tap/exit-ip-monitor
+open /Applications/ExitIPMonitor.app
+```
+
+It is a menu-bar app. The dashboard opens on the first launch, and again whenever you open the app while it is running. The country flag stays in the menu bar. The cask lives in [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap). It installs `ExitIPMonitor-<version>.zip` from this repository's [releases](https://github.com/jxz345/exit-ip-widget/releases) after checking its SHA-256.
+
+| Task | Command |
+| --- | --- |
+| Update | `brew upgrade --cask jxz345/tap/exit-ip-monitor` |
+| Uninstall (quits and removes the app) | `brew uninstall --cask jxz345/tap/exit-ip-monitor` |
+| Uninstall and remove settings and logs | `brew uninstall --zap --cask jxz345/tap/exit-ip-monitor` |
+
+### First launch
+
+The release is ad-hoc signed and not notarized; notarizing needs a paid Apple Developer account. Homebrew also keeps the download quarantine, because its `--no-quarantine` option is deprecated. So macOS checks the first launch with Gatekeeper: approve it in **System Settings → Privacy & Security → Open Anyway**.
+
+On macOS 27, the launch can stall instead. The process starts but stays at `_dyld_start`, syspolicyd logs `Prompt shown … waiting for response`, no flag appears, and **Open Anyway** is missing or does nothing. Quit the stalled app, verify the installed copy, and remove quarantine from this one app. The cask prints the same steps:
+
+```sh
+pkill -x ExitIPMonitor
+codesign --verify --deep --strict --verbose=2 /Applications/ExitIPMonitor.app
+xattr -dr com.apple.quarantine /Applications/ExitIPMonitor.app
+open /Applications/ExitIPMonitor.app
+```
+
+If `xattr` reports **Operation not permitted**, allow the app running the command (Terminal, or Visual Studio Code for its terminal) under **Privacy & Security → App Management**, then retry. This follows the approach of [Sleepless](https://github.com/jxz345/Sleepless), whose UPDATE_NOTES §8 records the investigation.
+
+If macOS says the app **is damaged and can't be opened**, the copy predates the current release and has only a partial signature. Install the current release.
+
+### Without Homebrew
+
+Each [release](https://github.com/jxz345/exit-ip-widget/releases) also has an Installer package, an install script, and `SHA256SUMS`. Check downloads with `shasum -a 256 -c SHA256SUMS`.
+
+- **`ExitIPMonitor-<version>.pkg`:** double-click it and click **Done** at the "can't verify" warning. Then click **Open Anyway** in **System Settings → Privacy & Security**, and enter your password in Installer.
+  - The package is unsigned, because signing one needs a Developer ID Installer certificate.
+  - It installs to `/Applications`, quits a running copy first, and launches the new app afterwards.
+  - Installer doesn't quarantine what it installs, so the app needs no second approval.
+  - The package is not relocatable, so it never updates a copy elsewhere. It allows Apple silicon and Intel without asking for Rosetta.
+- **`install.sh`**, for when the package's approval doesn't work. Run:
+
+  ```sh
+  curl -fsSL https://github.com/jxz345/exit-ip-widget/releases/latest/download/install.sh | bash
+  ```
+
+  The script:
+  - downloads the package with `curl`, which adds no quarantine, and checks its SHA-256 and the app's signature;
+  - quits a running copy;
+  - installs to `/Applications` without quarantine, or to `~/Applications` if `/Applications` isn't writable;
+  - launches the app.
+
+  With the package already in Downloads, `bash ~/Downloads/install.sh` uses the newest matching `ExitIPMonitor-<version>*.pkg` there instead; browsers save repeat downloads as `… (1).pkg`. Run it with `bash`, because a quarantined script run directly can be blocked. If replacing the app fails with **Operation not permitted**, allow the terminal under **App Management**. If the app doesn't start, the script prints signature, quarantine, Gatekeeper, and system-log details.
+- **A copied app**, for example one sent by AirDrop, is quarantined and can stall the same way. Use the recovery commands above.
+
+### What the downloaded build can't do
+
+The release has no Apple developer team, so it can't use an App Group; only a team provisioning profile authorizes one.
+
+- The menu-bar app, popover, dashboard, settings, and allowlist warning work fully. The app runs unsandboxed and keeps its data in `~/Library/Preferences` and `~/Library/Application Support/ExitIPMonitor`.
+- The **desktop widget** and **Control Center control** run sandboxed and can't read that data, so they have nothing to show.
+
+To get the widget and control working, [build from source](#start-here-get-the-source) with `--signed-build`, your Team ID, and a registered App Group.
+
 ## Liquid Glass conformance
 
 The implementation follows Apple’s Liquid Glass guidance for macOS 26+ without forcing a visual effect into the content layer:
@@ -26,7 +93,7 @@ The implementation follows Apple’s Liquid Glass guidance for macOS 26+ without
 | **Settings window** | Opened from the **gear** button in the menu-bar popover or the **Settings** button in the dashboard; a retained AppKit window (like the dashboard) so it reliably comes to the front. Sections: **Menu bar** display style, **Change attention** highlights, **Startup** (Launch at login + Open Login Items Settings), **Refresh** frequency, **IP location service** (provider pool, per-provider health and a **Test** action that checks exactly that provider—skipped, not redirected, while it is paused or out of daily budget, IPinfo Lite token in Keychain; without a token IPinfo Lite is skipped and its health line says so), and **Diagnostics** (clear indicators, redacted logs with configurable retention). Debug builds also expose in-memory failure simulations for manual QA. |
 | **Exit-IP allowlist warning** | The dashboard holds exact IPv4/IPv6 addresses you expect to exit from (empty list = no warnings). When a fresh, successful lookup returns an address outside the list, an **Exit IP Not Allowed** warning window opens once per address, and the popover and dashboard show an orange **Exit IP not on the allowlist** notice. The app **only warns**: it never blocks or changes networking, and the menu bar keeps showing the country. Failed lookups never warn. See [allowlist details](#exit-ip-allowlist-warning). |
 | **Refresh engine** | Checks immediately on launch; offers an opt-in **Launch at login** setting (in the dashboard's Monitoring group and Settings → Startup); refreshes after any network-environment change (gateway/default route, routing table including TUN split routes, interface or address, proxy, DNS, VPN/tunnel), system wake, screen wake, session activation, and app activation; supports explicit **Refresh now** buttons; uses a true 15-minute default cadence; persists the last successful result; and balances promptness against provider quotas with **immediate-then-wait** event handling (the first network/system event is checked at once; further events in the next 5 seconds become one trailing lookup on the next provider in the pool) and a layered [lookup budget](#lookup-budget-prompt-checks-vs-api-limits): a hard five-second gap per provider, a 6-lookup burst allowance refilling one every 2 minutes that throttles only follow-ups (a storm lasting over 30 seconds, retries) and routine triggers—**a real network change is never queued behind it**—freshness skipping for routine triggers, per-provider daily budgets at 80% of documented limits, and cooldowns after rate-limit/quota/auth refusals (a paused provider is skipped by normal rotation; the refused request is never retried elsewhere, and a pause never hides the last verified location). `NWPathMonitor` updates that report an unchanged path are ignored. A newly started lookup supersedes any queued one. |
-| **Release packaging (install on another Mac)** | `Scripts/package-release.sh` builds a **universal** (Apple silicon + Intel) Release app and ad-hoc signs it so the whole bundle is sealed. It verifies the signature and writes the release assets to `dist/`: an **app zip**, an **Installer package** (`.pkg`), **`install.sh`**, and **`SHA256SUMS`**. Ad-hoc builds run the app **unsandboxed**, the way every linker-signed build already ran, because an ad-hoc signature can't authorize the App Group. The widget extension stays sandboxed and can't read the app's data. The default generator build is signed the same way. On another Mac, the recommended install is the **Homebrew cask** `brew install --cask jxz345/tap/exit-ip-monitor` (tap [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap), same approach as Sleepless). It keeps Homebrew's normal quarantine and prints an explicit, app-only recovery for the macOS 27 launch stall. Without Homebrew, double-click the `.pkg` (one **Open Anyway** approval). The package quits a running copy first and launches the new one, and Installer doesn't quarantine the installed app. Or run `bash ~/Downloads/install.sh`, which installs the app from the downloaded `.pkg` without Installer or Gatekeeper and prints diagnostics if it does not start. See [install on another Mac](#install-on-another-mac). |
+| **Release packaging (install on another Mac)** | `Scripts/package-release.sh` builds a **universal** (Apple silicon + Intel) Release app and ad-hoc signs it so the whole bundle is sealed. It verifies the signature and writes the release assets to `dist/`: an **app zip**, an **Installer package** (`.pkg`), **`install.sh`**, and **`SHA256SUMS`**. Ad-hoc builds run the app **unsandboxed**, the way every linker-signed build already ran, because an ad-hoc signature can't authorize the App Group. The widget extension stays sandboxed and can't read the app's data. The default generator build is signed the same way. On another Mac, the recommended install is the **Homebrew cask** `brew install --cask jxz345/tap/exit-ip-monitor` (tap [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap), same approach as Sleepless). It keeps Homebrew's normal quarantine and prints an explicit, app-only recovery for the macOS 27 launch stall. Without Homebrew, double-click the `.pkg` (one **Open Anyway** approval). The package quits a running copy first and launches the new one, and Installer doesn't quarantine the installed app. Or run `bash ~/Downloads/install.sh`, which installs the app from the downloaded `.pkg` without Installer or Gatekeeper and prints diagnostics if it does not start. See [Install](#install). |
 | **Privacy and resilience** | The selected provider sees the public IP address. Provider credentials are kept in the macOS Keychain; the widget receives only the non-secret snapshot through the App Group. |
 
 ## Exit-IP allowlist warning
@@ -165,7 +232,7 @@ For a higher refresh rate, use one provider with a plan that explicitly permits 
 ## Folder map
 
 ```text
-exit_ip_widget/
+exit-ip-widget/
 ├── Sources/
 │   ├── ExitIPShared/             # Codable snapshot, shared App Group storage, providers, Keychain helper
 │   ├── ExitIPMonitorApp/         # Menu-bar app, monitor, dashboard/views, shared OpenIntent
@@ -185,53 +252,34 @@ exit_ip_widget/
 └── Package.swift                 # Tests shared core without Xcode UI targets
 ```
 
-### Start here: keep the source kit intact
+### Start here: get the source
 
-The archive expands to one folder named **`exit_ip_widget`**. That folder is the **source-kit root**. Do not copy individual Swift files, `Package.swift`, or `Scripts/check-build-environment.sh` into another folder and then run commands there.
+To build the app yourself, clone the repository. The clone's root folder is the **source-kit root**, and every command below runs from it. Do not copy individual Swift files, `Package.swift`, or `Scripts/check-build-environment.sh` into another folder and then run commands there.
+
+```bash
+git clone https://github.com/jxz345/exit-ip-widget.git
+cd exit-ip-widget
+KIT_ROOT="$PWD"
+test -f Package.swift && test -d Sources && test -d Configuration
+printf 'Using source-kit root: %s\n' "$KIT_ROOT"
+```
 
 There are two distinct locations after setup:
 
 | Location | Purpose | Commands run here? |
 | --- | --- | --- |
-| **Source-kit root** (`exit_ip_widget`) | Contains `Package.swift`, `Sources/`, `Tests/`, `Configuration/`, and `Scripts/`. This is the authoritative copy of the sources. | **Yes.** Run preflight and `swift test` here. |
-| **Xcode project folder** (`exit_ip_widget/XcodeProject`) | Holds the `.xcodeproj` that you create later. It references the source-kit files. | Only run the final `xcodebuild -project …` command from this guide, or use Xcode’s UI. |
-
-For a fresh download, these commands create an unambiguous working location. They assume the downloaded archive is named `ExitIPMonitor-source-kit.zip` in Downloads; adjust only the `ARCHIVE` line if your browser gave it another name.
-
-```bash
-ARCHIVE="$HOME/Downloads/ExitIPMonitor-source-kit.zip"
-WORKSPACE="$HOME/Developer/ExitIPMonitor"
-
-mkdir -p "$WORKSPACE"
-unzip -q "$ARCHIVE" -d "$WORKSPACE"
-
-KIT_ROOT="$WORKSPACE/exit_ip_widget"
-cd "$KIT_ROOT"
-test -f Package.swift && test -d Sources && test -d Configuration
-printf 'Using source-kit root: %s\n' "$PWD"
-```
-
-Expected final folder layout:
-
-```text
-$HOME/Developer/ExitIPMonitor/
-└── exit_ip_widget/                 ← KIT_ROOT; use this folder for preflight and SwiftPM
-    ├── Package.swift
-    ├── Sources/
-    ├── Tests/
-    ├── Configuration/
-    └── Scripts/
-```
+| **Source-kit root** (`exit-ip-widget`) | Contains `Package.swift`, `Sources/`, `Tests/`, `Configuration/`, and `Scripts/`. This is the authoritative copy of the sources. | **Yes.** Run preflight, `swift test`, and the scripts here. |
+| **Xcode project folder** (`exit-ip-widget/XcodeProject`) | Created by the generator and ignored by git. It holds the generated `.xcodeproj`, copies of `Sources/` and `Configuration/`, build output, and logs. Never edit the copies. | Only run the final `xcodebuild -project …` command from this guide, or use Xcode's UI. |
 
 ## Xcode setup
 
-This repository’s rules allow edits only inside `agent_workspace/**`, so this kit is intentionally supplied as source and Xcode configuration rather than adding a project file outside that permitted scope.
+The repository contains source and Xcode configuration, not an Xcode project; the generator below creates the project.
 
 > For the complete click-by-click procedure—extracting the archive, creating the project, adding every source file, removing Xcode templates, assigning target membership, configuring entitlements, and building—follow **[XCODE_ASSEMBLY.md](XCODE_ASSEMBLY.md)** in order.
 
 ### Automated project creation — recommended
 
-`XcodeProject` is deliberately empty in the source kit. It is the destination for the generated, self-contained Xcode project; do not add files to it by hand. From the **source-kit root**, run:
+`XcodeProject/` is not in the repository; it is ignored by git, and the generator creates it as a self-contained Xcode project. Do not add files to it by hand. From the **source-kit root**, run:
 
 ```bash
 cd "$KIT_ROOT"
@@ -244,7 +292,7 @@ The generator does all of the following in one logged run:
 2. Copies `Sources/` and `Configuration/` into `XcodeProject/`, preserving the original source kit unchanged.
 3. Creates `XcodeProject/project.yml` and `XcodeProject/ExitIPMonitor.xcodeproj` with the app target, WidgetKit extension, embedded extension build phase, target membership, Info plists, and entitlements.
 4. Downloads the pinned XcodeGen release only if `xcodegen` is not already installed.
-5. Builds the generated project with signing disabled, so compilation can be checked before an Apple team and App Group are configured.
+5. Builds the generated project without a signing identity, then ad-hoc signs it, with the app unsandboxed and the widget sandboxed. The app compiles and runs before an Apple team and App Group are configured.
 6. Writes the complete stdout/stderr transcript to `XcodeProject/Logs/generate-and-build-YYYYMMDD-HHMMSS-PID.log` and prints that absolute path on success or failure.
 
 For a real signed runnable build, supply the registered App Group and your Apple Developer **Team ID** (not the team name):
@@ -289,37 +337,20 @@ From the source-kit root, launch the locally built app bundle with:
 open "$PWD/XcodeProject/DerivedData/Build/Products/Debug/ExitIPMonitor.app"
 ```
 
-### Install on another Mac
-
-**Recommended: Homebrew.** On the other Mac:
+### Publishing a release
 
 ```bash
-brew install --cask jxz345/tap/exit-ip-monitor
-open /Applications/ExitIPMonitor.app
+bash Scripts/package-release.sh            # accepts generator options such as --app-group ID
 ```
 
-The cask lives in [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap) and installs the release's app zip after checking its SHA-256. `brew upgrade` picks up new releases. `brew uninstall --cask jxz345/tap/exit-ip-monitor` quits and removes the app, and `--zap` also removes settings and logs.
+The script builds a universal Release app and ad-hoc signs it, with the app unsandboxed and the widget sandboxed. It verifies the signature, both architectures, and the packaged app, and writes to `dist/`:
 
-The app is ad-hoc signed, not notarized, and Homebrew keeps the download quarantine (its `--no-quarantine` option is deprecated), so the first launch goes through Gatekeeper. Approve it in **System Settings → Privacy & Security → Open Anyway**. On macOS 27, the launch can stall instead: the process exists but is stuck at `_dyld_start`, syspolicyd logs `Prompt shown … waiting for response`, no menu-bar flag appears, and **Open Anyway** is absent or does nothing. The cask's caveats print the recovery, which removes quarantine from this one verified app:
+- `ExitIPMonitor-<version>.zip`, which the Homebrew cask installs;
+- `ExitIPMonitor-<version>.pkg`, the Installer package (scripts in `Scripts/pkg/`);
+- `install.sh`, which is `Scripts/install-release.sh` with the repository, version, and package SHA-256 filled in. The repository comes from the `origin` remote, or from `EXIT_IP_RELEASE_REPO=owner/repo`;
+- `SHA256SUMS`.
 
-```bash
-pkill -x ExitIPMonitor
-codesign --verify --deep --strict --verbose=2 /Applications/ExitIPMonitor.app
-xattr -dr com.apple.quarantine /Applications/ExitIPMonitor.app
-open /Applications/ExitIPMonitor.app
-```
-
-If `xattr` reports **Operation not permitted**, allow the terminal's host app (Terminal, or Visual Studio Code for its integrated terminal) under **Privacy & Security → App Management**, then retry. This is the same approach Sleepless uses (its UPDATE_NOTES §8 has the investigation).
-
-**Without Homebrew:** download from the [GitHub release](https://github.com/jxz345/exit-ip-widget/releases) and check it against `SHA256SUMS` (`shasum -a 256 -c SHA256SUMS`).
-
-- **Installer package:** double-click `ExitIPMonitor-<version>.pkg`. It is unsigned, because signing a package needs a Developer ID Installer certificate from a paid developer team. So approve it once: click **Done**, then **System Settings → Privacy & Security → Open Anyway**, then enter your password in Installer. The package installs to `/Applications`. It is not relocatable, so it never updates a copy found elsewhere, and it accepts macOS 14 or later on Apple silicon and Intel without asking for Rosetta. Its scripts in `Scripts/pkg/` quit a running copy first and launch the new one afterwards. Installer does not quarantine what it installs, so the app needs no second approval.
-- **`install.sh`** (when the package's approval fails): put it in **Downloads** next to the `.pkg` and run `bash ~/Downloads/install.sh`, or `bash ~/Downloads/install.sh /path/to/ExitIPMonitor-<version>.pkg`. Run it with `bash` rather than directly, because a quarantined script can be blocked. It uses the newest `ExitIPMonitor-<version>*.pkg` next to itself or in Downloads whose SHA-256 matches the release; browsers save repeat downloads as `… (1).pkg`, so older builds are skipped. Without a matching file, it downloads the package with `curl`; the whole install is then `curl -fsSL https://github.com/jxz345/exit-ip-widget/releases/download/v<version>/install.sh | bash`. The script verifies the signature, unpacks the app from the package, and quits a running copy. It installs to `/Applications`, or `~/Applications` when that is not writable, without the download quarantine, and launches the app. If replacing the app fails with **Operation not permitted**, allow the terminal under **App Management**. If the app does not start, it prints the signature, quarantine, Gatekeeper, and system-log details.
-- **Copying the app by itself** (for example by AirDrop) quarantines it, with the same possible stall. Use the recovery commands above.
-
-**Publishing a release:** run `bash Scripts/package-release.sh`, which accepts generator options such as `--app-group ID`. It writes `dist/ExitIPMonitor-<version>.zip`, `.pkg`, `install.sh` (`Scripts/install-release.sh` with the repository, version, and package SHA-256 filled in from the `origin` remote, or `EXIT_IP_RELEASE_REPO=owner/repo`), and `SHA256SUMS`. Attach all four to the GitHub release `v<version>`. Then set `version` and `sha256` in the tap's `Casks/exit-ip-monitor.rb` to the values the script prints, and push the tap.
-
-Only Developer ID signing plus notarization (a paid developer team) removes the Gatekeeper approvals. If macOS says the app **is damaged and can't be opened**, the copy has only the linker's partial signature, which was true of builds made before `package-release.sh`. Rebuild it. `check-signed-build.sh` reports this state as a FAIL.
+Create the GitHub release `v<version>` with all four files. Then set `version` and `sha256` in [the cask](https://github.com/jxz345/homebrew-tap/blob/main/Casks/exit-ip-monitor.rb) to the values the script prints, and push the tap. Every build has a new checksum, so the cask needs updating even when the same version is published again. Only Developer ID signing plus notarization, which needs a paid developer team, removes the Gatekeeper approval described in [First launch](#first-launch).
 
 Inspect a built bundle before installing or requesting a signed build with the read-only diagnostics helper:
 
@@ -365,7 +396,7 @@ The running app writes JSON-lines diagnostics to `~/Library/Application Support/
 | Compile and locally inspect the app bundle | **No** | The app bundle is created at the Debug path above and ad-hoc signed. |
 | Menu-bar app only, launched locally | **No** | The ad-hoc signed app runs unsandboxed and works from the Debug path above. It is not a sandboxed or notarized installation. |
 | Widget, Control Center control, and shared snapshot data | **Yes** | The app and extension need an App Group registered under the same developer team so they can share the stored exit-IP snapshot. |
-| Copy the menu-bar app to another Mac | **No** | `brew install --cask jxz345/tap/exit-ip-monitor`, or the release's `.pkg` / `install.sh` from `Scripts/package-release.sh` (ad-hoc signed, universal). The first launch needs one Gatekeeper approval or the app-only quarantine recovery; see [install on another Mac](#install-on-another-mac). The widget still needs a registered App Group. |
+| Copy the menu-bar app to another Mac | **No** | `brew install --cask jxz345/tap/exit-ip-monitor`, or the release's `.pkg` / `install.sh` from `Scripts/package-release.sh` (ad-hoc signed, universal). The first launch needs one Gatekeeper approval or the app-only quarantine recovery; see [Install](#install). The widget still needs a registered App Group. |
 | Sign, install reliably, or distribute without a Gatekeeper prompt | **Yes** | Supply a real team and registered App Group using `--signed-build`. Notarization is additionally required for distribution without the **Open Anyway** step. |
 
 Apple documents that an App Group lets an app and its extension share a container and that Xcode retrieves groups from the developer account. Therefore, this project’s full menu-bar + widget + Control Center design cannot be correctly installed without an Apple developer team and a registered App Group. See Apple’s [Configuring app groups](https://developer.apple.com/documentation/xcode/configuring-app-groups).
@@ -376,7 +407,7 @@ Apple documents that an App Group lets an app and its extension share a containe
 - **Full Xcode** with a **macOS 26-or-newer SDK** to compile the Control Center control. The standalone Command Line Tools package does not include `xcodebuild`, so it is not sufficient for this app and its WidgetKit extension.
 - macOS 14+ deployment target for the menu-bar app and normal WidgetKit widget.
 - macOS 26+ at runtime for the Control Center control.
-- An Apple developer team with an App Group enabled for both targets.
+- For the widget and Control Center control: an Apple developer team with an App Group enabled for both targets. The menu-bar app builds and runs without one.
 
 > Xcode already includes the appropriate Swift compiler. Do **not** download another toolchain to build this app. A separate internet-download script exists only for optional Swift Package Manager testing: `bash Scripts/install-standalone-swift.sh`. The standalone compiler cannot build the SwiftUI app, WidgetKit extension, or Control Center control.
 
@@ -391,10 +422,10 @@ bash Scripts/check-build-environment.sh
 bash Scripts/check-build-environment.sh --test
 ```
 
-If the script was copied out of the source kit—for example, into `~/Downloads`—point it back to the extracted kit explicitly:
+If the script was copied out of the source kit—for example, into `~/Downloads`—point it back to the clone explicitly:
 
 ```bash
-bash ~/Downloads/check-build-environment.sh --project /path/to/exit_ip_widget
+bash ~/Downloads/check-build-environment.sh --project /path/to/exit-ip-widget
 ```
 
 The script checks macOS version, the active developer directory, full Xcode and first-launch status, Xcode license, macOS SDK version, Swift, project/entitlement plist syntax, placeholder App Group identifiers, local signing identities, and (with `--test`) the portable shared-core tests. It exits nonzero when a blocking build prerequisite is missing. If Command Line Tools are active while a full Xcode app is detected, it reports **one actionable developer-directory failure** and intentionally skips dependent `xcodebuild`, license, and SDK checks until Xcode is selected. With `--test`, it now prints the exact `xcrun swift test --package-path … --verbose` command and saves the full compiler output as `swift-test.log` in the source-kit root; the first earlier `error:` line is the actionable diagnosis, not SwiftPM’s final summary.
@@ -404,7 +435,7 @@ The script checks macOS version, the active developer directory, full Xcode and 
 | **Not macOS** | Build the SwiftUI app and WidgetKit extension on a Mac. Linux—including this source-kit preparation environment—cannot build the Xcode targets. |
 | **Host macOS is too old for Xcode 26** | Update macOS through **System Settings → General → Software Update**. Xcode 26 needs macOS Sequoia 15.6 or later; verify the latest compatible pairing in Apple’s [Xcode system-requirements table](https://developer.apple.com/xcode/system-requirements/). |
 | **Full Xcode or `xcodebuild` missing** | Install the current compatible Xcode from the [Mac App Store](https://apps.apple.com/us/app/xcode/id497799835?mt=12) or Apple’s [Downloads](https://developer.apple.com/download/). Command Line Tools alone are not enough for `xcodebuild` or WidgetKit project builds. |
-| **Source-kit root not found** | Do not run an isolated copied script as though its parent folder were the kit. `cd` into the extracted `exit_ip_widget` directory, or supply `--project /path/to/exit_ip_widget`. |
+| **Source-kit root not found** | Do not run an isolated copied script as though its parent folder were the kit. `cd` into the cloned `exit-ip-widget` directory, or supply `--project /path/to/exit-ip-widget`. |
 | **Command Line Tools missing** | After full Xcode is installed, this is normally already satisfied. For command-line-only tools, run `xcode-select --install` and accept the macOS dialog. Apple documents this package and its version limits [here](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools). |
 | **Wrong active developer directory** | Point Terminal at the installed Xcode: `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`. Substitute the actual path for a beta or renamed Xcode app, then rerun the preflight. |
 | **First-launch components incomplete** | Run `sudo xcodebuild -runFirstLaunch`, then rerun the preflight. |
