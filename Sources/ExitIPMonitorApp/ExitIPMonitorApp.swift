@@ -7,6 +7,12 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.monitor.start()
+        do {
+            try maintainClashVergeProfile()
+        } catch {
+            RuntimeLog.shared.error("clash_profile_write_failed", fields: ["error": error.localizedDescription])
+        }
+        TailscaleVergeWatcher.shared.start()
         // The app is menu-bar only, and a crowded menu bar can hide its item, so the very first
         // launch opens the dashboard once to show the app is running.
         let defaults = ExitIPAppGroup.defaults
@@ -39,10 +45,15 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
         SettingsWindowController.shared.show(monitor: monitor)
     }
 
+    static func showEventLog() {
+        EventLogWindowController.shared.show()
+    }
+
     /// The dashboard and settings windows each make the app `.regular` while open; only return
     /// to accessory mode once neither is still on screen.
     static func restoreAccessoryModeIfNoWindowsVisible(closing: NSWindow) {
-        let stillVisible = [DashboardWindowController.shared.window, SettingsWindowController.shared.window]
+        let stillVisible = [DashboardWindowController.shared.window, SettingsWindowController.shared.window,
+                            EventLogWindowController.shared.window]
             .contains { $0 != nil && $0 !== closing && $0!.isVisible }
         if !stillVisible {
             NSApp.setActivationPolicy(.accessory)
@@ -63,7 +74,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         self.window = window
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
-        window.center()
+        placeOnActiveScreen(window)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
     }
@@ -75,15 +86,16 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private func makeWindow(monitor: PublicIPMonitor) -> NSWindow {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 700),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.identifier = NSUserInterfaceItemIdentifier("exit-ip-settings")
         window.title = "Exit IP Settings"
-        window.contentViewController = NSHostingController(rootView: SettingsView(monitor: monitor))
-        window.minSize = NSSize(width: 560, height: 400)
+        window.contentViewController = fixedSizeHostingController(SettingsView(monitor: monitor))
+        window.setContentSize(NSSize(width: 560, height: 700))
+        window.contentMinSize = NSSize(width: 520, height: 420)
         window.isReleasedWhenClosed = false
         window.delegate = self
         return window
@@ -106,24 +118,9 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         // Dock icon and Cmd-Tab entry); `windowWillClose` restores accessory mode.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
-        centerOnActiveScreen(window)
+        placeOnActiveScreen(window)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
-    }
-
-    /// `NSWindow.center()` places windows above center; the dashboard opens at the true center
-    /// of the screen the pointer is on (the one whose menu bar was just clicked).
-    private func centerOnActiveScreen(_ window: NSWindow) {
-        let mouse = NSEvent.mouseLocation
-        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else {
-            window.center()
-            return
-        }
-        // The hosting controller sizes the window during layout; center with the final size.
-        window.layoutIfNeeded()
-        let visible = screen.visibleFrame
-        let size = window.frame.size
-        window.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2))
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -132,12 +129,13 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow(monitor: PublicIPMonitor) -> NSWindow {
-        let hostingController = NSHostingController(
-            rootView: DashboardView(monitor: monitor)
+        // Opens wide enough for two columns, so nothing needs scrolling.
+        let hostingController = fixedSizeHostingController(
+            DashboardView(monitor: monitor)
                 .frame(minWidth: 520, minHeight: 380)
         )
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 860),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -145,12 +143,64 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         window.identifier = NSUserInterfaceItemIdentifier("exit-ip-dashboard")
         window.title = "Exit IP Dashboard"
         window.contentViewController = hostingController
-        window.minSize = NSSize(width: 520, height: 380)
+        window.setContentSize(NSSize(width: 1000, height: 860))
+        window.contentMinSize = NSSize(width: 520, height: 380)
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.center()
         return window
     }
+}
+
+/// The proxy saved from the dashboard (Keychain), or nil when none was saved.
+@MainActor
+func loadClashProxySettings() -> ClashProxySettings? {
+    guard let text = try? SecureTokenStore.read(account: ClashVergeProfile.keychainAccount) else { return nil }
+    return ClashVergeProfile.decode(text)
+}
+
+/// Keeps the full Clash Verge profile (~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml,
+/// mode 0600) current with the saved proxy and the app's template, at launch and on Save. Only the app
+/// writes it; no installer deploys it, and nothing is written into Clash Verge. Never logs the settings.
+/// Returns nil when no proxy has been saved.
+@MainActor
+@discardableResult
+func maintainClashVergeProfile(_ settings: ClashProxySettings? = nil) throws -> ClashVergeProfile.WriteOutcome? {
+    // An earlier build kept only the provider part here.
+    try? FileManager.default.removeItem(at: ClashVergeProfile.legacyPartialFileURL)
+    guard let settings = settings ?? loadClashProxySettings() else { return nil }
+    let outcome = try ClashVergeProfile.write(ClashVergeProfile.render(settings), to: ClashVergeProfile.fileURL)
+    if outcome == .written {
+        RuntimeLog.shared.info("clash_profile_written", fields: ["path": ClashVergeProfile.fileURL.path])
+    }
+    return outcome
+}
+
+/// A hosting controller that only enforces the view's minimum size. With the default sizing
+/// options, the window hugs the SwiftUI content and collapses to its minimum: the dashboard opened
+/// at 520 × 380 (one stacked column to scroll) and the scrolling Settings form as a bare title bar.
+@MainActor
+func fixedSizeHostingController<Content: View>(_ rootView: Content) -> NSHostingController<Content> {
+    let controller = NSHostingController(rootView: rootView)
+    controller.sizingOptions = .minSize
+    return controller
+}
+
+/// Opens a window at the true center of the screen the pointer is on (the one whose menu bar was
+/// just clicked); `NSWindow.center()` places it above center. A window larger than that screen's
+/// visible area is shrunk to fit, so a small display never gets an off-screen title bar.
+@MainActor
+func placeOnActiveScreen(_ window: NSWindow) {
+    let mouse = NSEvent.mouseLocation
+    guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else {
+        window.center()
+        return
+    }
+    // The hosting controller sizes the window during layout; place it with the final size.
+    window.layoutIfNeeded()
+    let visible = screen.visibleFrame
+    let size = NSSize(width: min(window.frame.width, visible.width), height: min(window.frame.height, visible.height))
+    window.setFrame(NSRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2,
+                           width: size.width, height: size.height), display: false)
 }
 
 @main

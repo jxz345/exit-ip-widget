@@ -58,7 +58,7 @@ private struct ExitIPWidgetView: View {
             if entry.indicators.suppressLocation {
                 ContentUnavailableView(
                     "Exit IP unavailable",
-                    systemImage: "exclamationmark.triangle.fill",
+                    systemImage: ExitIPIndicatorSymbol.lookupError,
                     description: Text(entry.indicators.errorMessage ?? "A successful lookup is required to show location.")
                 )
             } else if let snapshot = entry.snapshot {

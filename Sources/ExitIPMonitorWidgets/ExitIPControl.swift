@@ -7,9 +7,10 @@ struct ExitIPControl: ControlWidget {
         let snapshot = SnapshotStore().load()
         let indicators = IndicatorStore().load()
         let controlTitle = compactSummary(snapshot, indicators: indicators)
-        let symbol = indicators.suppressLocation || snapshot?.isCountryChangeHighlighted() == true
-            ? "exclamationmark.triangle.fill"
-            : "network"
+        // A stop sign while the exit IP can't be verified; the triangle only for a confirmed country change.
+        let symbol = indicators.suppressLocation
+            ? ExitIPIndicatorSymbol.lookupError
+            : (snapshot?.isCountryChangeHighlighted() == true ? ExitIPIndicatorSymbol.countryChanged : "network")
 
         return StaticControlConfiguration(kind: ExitIPSurfaceID.control) {
             ControlWidgetButton(action: OpenExitIPDashboardIntent(target: .dashboard)) {

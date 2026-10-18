@@ -15,11 +15,25 @@ open /Applications/ExitIPMonitor.app
 
 It is a menu-bar app. The dashboard opens on the first launch, and again whenever you open the app while it is running. The country flag stays in the menu bar. The cask lives in [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap). It installs `ExitIPMonitor-<version>.zip` from this repository's [releases](https://github.com/jxz345/exit-ip-widget/releases) after checking its SHA-256.
 
+Homebrew then asks for your password once, to install and start the [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon) daemon from the app bundle, the way Sleepless installs its service. It prints whether Tailscale and Clash Verge Rev are installed:
+
+```text
+Tailscale: installed.
+Clash Verge Rev: not installed (expected /Applications/Clash Verge.app). Nothing uses the provider until you install it and import the profile shown in Exit IP's dashboard.
+```
+
+Neither app is required. Without Tailscale the daemon runs and serves Reject, and the dashboard reads **Reject · Tailscale isn't installed**. Without Clash Verge Rev nothing uses the provider, and the dashboard says so. Install either app later and the provider starts working within a few seconds, with no reinstall.
+
 | Task | Command |
 | --- | --- |
 | Update | `brew upgrade --cask jxz345/tap/exit-ip-monitor` |
-| Uninstall (quits and removes the app) | `brew uninstall --cask jxz345/tap/exit-ip-monitor` |
-| Uninstall and remove settings and logs | `brew uninstall --zap --cask jxz345/tap/exit-ip-monitor` |
+| Reinstall the same version (for example over the first 1.0 build) | `rm -f "$(brew --cache --cask jxz345/tap/exit-ip-monitor)" && brew reinstall --cask jxz345/tap/exit-ip-monitor` |
+| Uninstall (quits and removes the app and the daemon, no password) | `brew uninstall --cask jxz345/tap/exit-ip-monitor` |
+| Uninstall and remove settings, logs, and the removal grant | `brew uninstall --zap --cask jxz345/tap/exit-ip-monitor` |
+| Turn the daemon off (stays off across reinstalls) | `sudo /bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/daemon.sh remove` |
+| Turn it back on | `sudo /bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/daemon.sh install` |
+
+v1.0 was rebuilt as 1.0 (2) with the daemon. Homebrew doesn't offer a rebuild with the same version as an upgrade, so a Mac with the first 1.0 build needs the reinstall command above. It removes the cached download first; otherwise Homebrew reports a SHA-256 mismatch.
 
 ### First launch
 
@@ -104,14 +118,15 @@ The implementation follows Apple’s Liquid Glass guidance for macOS 26+ without
 | --- | --- |
 | **Menu bar** | Defaults to the compact **color flag**. Settings offers **country name**, **country code**, **color flag**, or **flag + country name**. It shows no IP or provider information in the resting state. |
 | **Change attention** | A country change is first confirmed by a **different documented API**. Only then does it trigger a change dot, bold label, accessible announcement, and a visible yellow **menu-bar popover, dashboard, and widget** banner for **10 minutes**. macOS renders menu-bar extra labels as monochrome template content, so the menu-bar dot and capsule appear in the system menu-bar color rather than yellow; the yellow treatment is visible in the popover, dashboard, and widget. The person can dismiss the current alert or permanently turn off future highlights in the popover, dashboard, or Settings. Changing IP while keeping the same country does not trigger the alert. |
-| **Error state** | A failed lookup shows a clear error and hides country name/flag across the menu bar, dashboard, widget, and Control Center. **Clear error** removes the message but keeps location hidden until a successful lookup restores it. Provider country codes are validated or resolved from a known country name before a snapshot is stored. |
+| **Error state** | A failed lookup shows a clear error and hides country name/flag across the menu bar, dashboard, widget, and Control Center, showing a **stop icon** (`xmark.octagon.fill`) where the flag would be: the menu bar shows the icon (with "Exit IP error" for the text styles), the popover and dashboard header show it in red, and the widget and Control Center use it too. Control Center keeps the triangle only for a confirmed country change. **Clear error** removes the message but keeps location hidden until a successful lookup restores it. Provider country codes are validated or resolved from a known country name before a snapshot is stored. |
 | **Desktop / Notification Center widget** | Small: flag, country code/name, age. **Medium (recommended for quick inspection):** country, IP, city/region when supplied, organization, relative update time, stale marker, and country-change banner — all without opening the app. |
 | **Control Center (macOS 26+)** | A resizable `ControlWidgetButton` shows a compact title in the form **`JP · 203.0.113.8 · 1:45 PM`** (with ` · stale` appended when the data is older than twice the refresh interval) plus an alert symbol after a confirmed country change or while the location is hidden by an error. Resize the tile in Control Center for the system to expose more title/value space. Tapping opens the dashboard, but the country code, current public IP, and last-update time are visible without opening it. |
-| **Dashboard / popover** | The dashboard opens by itself on the app's **first launch** and whenever the app is **opened again while it is running** (Finder, Spotlight, `open`). The app is otherwise menu-bar only, and a crowded menu bar can hide its item. The **dashboard** shows public IP, country, city/region/timezone when the provider supplies it, ASN/organization, provider (**Source**), and a clear absolute **Last updated** timestamp plus relative age. A **Monitoring** group in the dashboard has the **Launch at login** toggle (the same one as Settings → Startup, with **Open Login Items Settings**). It also shows a read-only summary of refresh frequency, change-highlight state, and provider rotation order: the next provider is marked, and each provider shows whether it is paused, skipped for a missing token, or out of daily budget, plus today's calls against its budget. An **Edit in Settings…** button opens Settings. The dashboard scrolls, so its footer (**Settings**, **Clear indicators**, **Quit Exit IP**, status line) stays visible at any window size. The **popover** is the compact view: flag, country, public IP, city/region, organization, last-updated time, and relative age. On both, data older than twice the selected refresh interval gets a **refresh is overdue** notice (the menu bar prefixes **Stale ·**). During a confirmed change, both surfaces provide the same yellow notice with **Dismiss** and **Turn Off Highlights** actions. |
-| **Settings window** | Opened from the **gear** button in the menu-bar popover or the **Settings** button in the dashboard; a retained AppKit window (like the dashboard) so it reliably comes to the front. Sections: **Menu bar** display style, **Change attention** highlights, **Startup** (Launch at login + Open Login Items Settings), **Refresh** frequency, **IP location service** (provider pool, per-provider health and a **Test** action that checks exactly that provider—skipped, not redirected, while it is paused or out of daily budget, IPinfo Lite token in Keychain; without a token IPinfo Lite is skipped and its health line says so), and **Diagnostics** (clear indicators, redacted logs with configurable retention). Debug builds also expose in-memory failure simulations for manual QA. |
+| **Dashboard / popover** | The dashboard opens by itself on the app's **first launch** and whenever the app is **opened again while it is running** (Finder, Spotlight, `open`). The app is otherwise menu-bar only, and a crowded menu bar can hide its item. The **dashboard** opens at about 1000 × 780 in two columns, so everything fits without scrolling; a narrow window stacks the columns and scrolls only as a last resort. Notices (allowlist, error, country change) and the header (flag, country, IP, **Refresh now**) span the full width. The left column shows the current exit IP (public IP, country, city/region/timezone when the provider supplies it, ASN/organization, provider (**Source**), and **Last updated** as an absolute time plus relative age), the allowlist, and, while the Tailscale daemon is installed, **Clash Verge profile**: the proxy form, **Save Profile** / **Remove**, and the generated profile's location. In the right column, **Apply in Clash Verge** lists the import steps with an **Open Clash Verge** button. The right column has **Monitoring** and, when installed, the Tailscale provider. Every group uses one label column, shows each path or URL on one line (middle-truncated, the full value in a tooltip) with its buttons at the end of the row, and ends with one caption. **Monitoring** shows **Schedule**: the same sentence as the footer, the popover, and Settings → Refresh ("Checks every 15 minutes, and right after a network, route, proxy, DNS, VPN/TUN, wake, or app-activation change."). It also has Highlights, Providers, **Launch at login** with **Login Items…**, **Edit in Settings…**, and **Event Log…**. The **Event Log** window lists important events, one concise line each with a UTC time (for example `2026-10-18 13:28:56Z  Check · route changed · IPWHOIS.io`). It loads the last 500 from the runtime logs, then updates live, with **Copy All** and **Show Log Files**. Tailscale provider lines appear only when what Clash is served changes. It also shows a read-only summary of refresh frequency, change-highlight state, and provider rotation order: the next provider is marked, and each provider shows whether it is paused, skipped for a missing token, or out of daily budget, plus today's calls against its budget. An **Edit in Settings…** button opens Settings. While the [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon) is installed, a **Tailscale → Clash Verge provider** group shows what Clash is served (in plain words, for example **Reject · Tailscale isn't connected**), the last check, the provider file's location, its `127.0.0.1:18766` address, and a **Clash Verge** row: **Installed** with **Open**, or a note that nothing uses the provider until Clash Verge Rev is installed. Without Clash Verge Rev, **Apply in Clash Verge** says to install it first and hides **Open Clash Verge**. The footer (**Settings**, **Clear indicators**, **Quit Exit IP**, status line) stays visible at any window size. The **popover** is the compact view: flag, country, public IP, city/region, organization, last-updated time, and relative age. On both, data older than twice the selected refresh interval gets a **refresh is overdue** notice (the menu bar prefixes **Stale ·**). During a confirmed change, both surfaces provide the same yellow notice with **Dismiss** and **Turn Off Highlights** actions. |
+| **Settings window** | Opened from the **gear** button in the menu-bar popover or the **Settings** button in the dashboard; a retained AppKit window (like the dashboard) so it reliably comes to the front, at about 560 × 700 on the screen with the pointer (smaller screens get a window that fits). Sections: **Menu bar** display style, **Change attention** highlights, **Startup** (Launch at login + Open Login Items Settings), **Refresh** frequency, **IP location service** (provider pool, per-provider health and a **Test** action that checks exactly that provider—skipped, not redirected, while it is paused or out of daily budget, IPinfo Lite token in Keychain; without a token IPinfo Lite is skipped and its health line says so), and **Diagnostics** (clear indicators, redacted logs with configurable retention). Debug builds also expose in-memory failure simulations for manual QA. |
 | **Exit-IP allowlist warning** | The dashboard holds exact IPv4/IPv6 addresses you expect to exit from (empty list = no warnings). When a fresh, successful lookup returns an address outside the list, an **Exit IP Not Allowed** warning window opens once per address, and the popover and dashboard show an orange **Exit IP not on the allowlist** notice. The app **only warns**: it never blocks or changes networking, and the menu bar keeps showing the country. Failed lookups never warn. See [allowlist details](#exit-ip-allowlist-warning). |
+| **Tailscale → Clash Verge provider (root daemon)** | For Clash Verge Rev (Mihomo) next to the native Tailscale client: keeps one proxy-provider member, `TS-NATIVE`, bound to the current, verified Tailscale `utunN` and serves it at `http://127.0.0.1:18766/provider.yaml`, so a reconnect that renumbers the tunnel needs no profile reload. **Homebrew installs and starts it on every Mac** (cask postflight, one password prompt), Sleepless-style; `sudo /bin/bash …/daemon.sh install` does the same by hand. Install stops whatever else holds the port (a launchd job is disabled so it stays off). A Mac without Tailscale or Clash Verge Rev gets it too: install prints which app is missing, the provider serves Reject with a [plain-language reason](#reasons) (**Reject · Tailscale isn't installed**), and the dashboard's **Clash Verge** row says when nothing uses the provider. A **removal grant** in `/etc/sudoers.d/` lets `brew uninstall` remove the daemon without a password; it allows only unloading the two jobs, restarting the monitor, and deleting the daemon's files and the grant. `daemon.sh remove` turns the daemon off and leaves a marker in your Library so Homebrew reinstalls keep it off. A root monitor checks the route to `100.100.100.100`, the Tailscale CLI's address (run as the console user), and interface ownership every 2 seconds and writes `provider.yaml`. A launchd-held loopback socket serves that file as `nobody`, Reject whenever Tailscale can't be verified or the last check is more than 12 seconds old. The dashboard shows its status in plain words, the file's location (**Open File**, **Show in Finder**), the address it is served at (**Open in Browser**), and whether Clash Verge Rev is installed (**Open**). The dashboard's **Clash Verge profile** group takes your proxy (server, port, username, password; kept in the Keychain). The app writes a complete Clash Verge profile with it, including the provider, to `~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml` (0600; never committed or logged; no installer writes it). It shows the file's location (**Open File**, **Show in Finder**) and how to import it into Clash Verge as its one Local profile. See [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon). |
 | **Refresh engine** | Checks immediately on launch; offers an opt-in **Launch at login** setting (in the dashboard's Monitoring group and Settings → Startup); refreshes after any network-environment change (gateway/default route, routing table including TUN split routes, interface or address, proxy, DNS, VPN/tunnel), system wake, screen wake, session activation, and app activation; supports explicit **Refresh now** buttons; uses a true 15-minute default cadence; persists the last successful result; and balances promptness against provider quotas with **immediate-then-wait** event handling (the first network/system event is checked at once; further events in the next 5 seconds become one trailing lookup on the next provider in the pool) and a layered [lookup budget](#lookup-budget-prompt-checks-vs-api-limits): a hard five-second gap per provider, a 6-lookup burst allowance refilling one every 2 minutes that throttles only follow-ups (a storm lasting over 30 seconds, retries) and routine triggers—**a real network change is never queued behind it**—freshness skipping for routine triggers, per-provider daily budgets at 80% of documented limits, and cooldowns after rate-limit/quota/auth refusals (a paused provider is skipped by normal rotation; the refused request is never retried elsewhere, and a pause never hides the last verified location). `NWPathMonitor` updates that report an unchanged path are ignored. A newly started lookup supersedes any queued one. |
-| **Release packaging (install on another Mac)** | Pushing a `v<version>` tag runs `.github/workflows/release.yml` on a clean GitHub `macos-26` runner. It runs `Scripts/package-release.sh`, which builds a **universal** (Apple silicon + Intel) Release app and ad-hoc signs it so the whole bundle is sealed. The release gets an **app zip**, an **Installer package** (`.pkg`), **`install.sh`**, and **`SHA256SUMS`**, plus a Sigstore **build attestation** and notes from `CHANGELOG.md`. Release files must carry **no extended attributes**: a developer Mac's `com.apple.provenance` stamps would stall the launch on every other Mac. So the zip is made without them, and CI fails if any file has them. Ad-hoc builds run the app **unsandboxed**, the way every linker-signed build already ran, because an ad-hoc signature can't authorize the App Group. The widget extension stays sandboxed and can't read the app's data. The default generator build is signed the same way. Users install with the **Homebrew cask** `brew install --cask jxz345/tap/exit-ip-monitor` (tap [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap), same approach as Sleepless). It keeps Homebrew's normal quarantine and prints an explicit, app-only recovery for the macOS 27 launch stall. Without Homebrew, double-click the `.pkg` (one **Open Anyway** approval); it quits a running copy and launches the new one. Or use `install.sh`, which installs from the `.pkg` without Installer or Gatekeeper. See [Install](#install) and [Publishing a release](#publishing-a-release). |
+| **Release packaging (install on another Mac)** | Pushing a `v<version>` tag runs `.github/workflows/release.yml` on a clean GitHub `macos-26` runner. It runs `Scripts/package-release.sh`, which builds a **universal** (Apple silicon + Intel) Release app and ad-hoc signs it so the whole bundle is sealed. The release gets an **app zip**, an **Installer package** (`.pkg`), **`install.sh`**, and **`SHA256SUMS`**, plus a Sigstore **build attestation** and notes from `CHANGELOG.md`. Release files must carry **no extended attributes**: a developer Mac's `com.apple.provenance` stamps would stall the launch on every other Mac. So the zip is made without them, and CI fails if any file has them. Ad-hoc builds run the app **unsandboxed**, the way every linker-signed build already ran, because an ad-hoc signature can't authorize the App Group. The widget extension stays sandboxed and can't read the app's data. The default generator build is signed the same way. Users install with the **Homebrew cask** `brew install --cask jxz345/tap/exit-ip-monitor` (tap [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap), same approach as Sleepless). It keeps Homebrew's normal quarantine and prints an explicit, app-only recovery for the macOS 27 launch stall. Like Sleepless's cask, its postflight runs the bundled `daemon.sh install` with `sudo` (unless the daemon was turned off), and its uninstall step removes the daemon through the removal grant with `sudo -n`, so it never asks for a password; `zap` also deletes the grant. Without Homebrew, double-click the `.pkg` (one **Open Anyway** approval); it quits a running copy and launches the new one. Or use `install.sh`, which installs from the `.pkg` without Installer or Gatekeeper. Neither installs the daemon; run `daemon.sh install` from the app bundle for it. See [Install](#install) and [Publishing a release](#publishing-a-release). |
 | **Privacy and resilience** | The selected provider sees the public IP address. Provider credentials are kept in the macOS Keychain; the widget receives only the non-secret snapshot through the App Group. |
 
 ## Exit-IP allowlist warning
@@ -134,6 +149,280 @@ not an exit-IP error: the menu bar, widget, and Control Center keep showing the
 verified country. Adding the current address, emptying the list, or a later
 lookup that returns an allowed address closes the window and removes the notice.
 A failed lookup never opens a warning.
+
+## Tailscale → Clash Verge provider (root daemon)
+
+Clash Verge Rev in TUN mode next to the native Tailscale client must send MagicDNS
+(`+.ts.net`, answered by `100.100.100.100`) out through Tailscale's own `utunN`.
+macOS can renumber that tunnel when Tailscale reconnects, and a profile that names
+the interface then breaks until it is edited and reloaded. This optional daemon
+keeps one Mihomo proxy-provider member, `TS-NATIVE`, bound to the current, verified
+Tailscale interface. Mihomo polls it every 3 seconds, so reconnects are picked up
+with the same core and no reload. The rest of the app works the same without it.
+
+Homebrew installs it on every Mac. It has two LaunchDaemons, installed and removed together by
+`Sources/ExitIPDaemon/daemon.sh` (also shipped in the app bundle as
+`Contents/Resources/daemon.sh`):
+
+- **Monitor**, `com.example.exitipmonitor.tailscale-verge`, root, kept alive by
+  launchd. Every 2 seconds it requires a non-default route to `100.100.100.100` on a
+  `utunN`, exactly one CGNAT IPv4 address from the Tailscale CLI, that interface UP
+  and owning that address, and a second route check showing the same interface.
+  Each command has a 2-second limit. Only the CLI drops privileges: it runs as the
+  console user (with that user's groups, which the CLI needs to reach the Tailscale
+  client), and with nobody at the console (the login window) the result is Reject.
+  `route` and `ifconfig` stay root. Each pass writes two files to
+  `/Library/Application Support/ExitIPMonitor/TailscaleVerge/`:
+  `provider.yaml`, the exact bytes Clash receives, and `state`.
+- **Responder**, `com.example.exitipmonitor.tailscale-verge-http`. launchd owns the
+  `127.0.0.1:18766` socket and runs one short `/bin/bash` process per connection, as
+  `nobody`. It reads the two files and answers `GET`/`HEAD` for `/provider.yaml` and
+  `/status.json` (anything else is 404 or 501). It never runs a command or calls the
+  Mihomo controller. It serves `provider.yaml` only while `state` is fresh and agrees
+  with it. Otherwise, or when the last check is more than 12 seconds old, it serves
+  Reject, so a stalled or stopped monitor turns into Reject rather than a stale tunnel.
+
+The responses match the earlier standalone helper's (identity `tailscale-verge-live-v1`)
+byte for byte, with two exceptions. `checked_age_seconds` in `status.json` is whole
+seconds. `provider.yaml` is sent as `text/plain; charset=utf-8` rather than
+`application/yaml`, so a browser shows it instead of downloading it. Mihomo's HTTP
+provider reads only the status code, `ETag`, and body, so the body Clash parses is
+unchanged, and a profile that already uses the URL needs no change.
+
+### Install, disable, and rollback
+
+`brew install` and `brew reinstall` run `daemon.sh install` from the app bundle after one password prompt. By hand, as an administrator (or with `/Applications/ExitIPMonitor.app/Contents/Resources/daemon.sh`):
+
+```bash
+sudo /bin/bash Sources/ExitIPDaemon/daemon.sh install   # report prerequisites, copy to root-owned files, load both jobs, add the grant
+/bin/bash Sources/ExitIPDaemon/daemon.sh status         # no root needed
+sudo /bin/bash Sources/ExitIPDaemon/daemon.sh remove    # unload both, delete their files and the grant, keep it off
+```
+
+`install` first reports whether Tailscale (`/Applications/Tailscale.app`) and Clash Verge Rev (`/Applications/Clash Verge.app`) are installed. A missing app is never an error: the daemon is installed either way. It then copies `tailscale-verge.sh` to
+`/Library/Application Support/ExitIPMonitor/` (root-owned, so launchd never runs code
+you can edit) and writes the plists to `/Library/LaunchDaemons/`. Both survive a
+restart. It prints the monitor's first check. Before loading the responder, it checks
+with `connect()` whether something else already accepts connections on
+`127.0.0.1:18766` (a `bind()` test can succeed over another process's wildcard
+listener on macOS), and **stops whatever holds the port**:
+
+- A process that is the main process of a launchd job (for example the earlier
+  standalone helper, `gui/<uid>/local.tailscale-verge.live-provider`) has its job
+  **disabled and booted out**, so neither KeepAlive, the next login, nor a restart
+  starts it again. The output names the job and the command that allows it again
+  (`sudo launchctl enable <domain>/<label>`). A process that only inherited a job's
+  name from its parent is not treated as that job.
+- Any other process gets `TERM`, then `KILL` after 5 seconds.
+- Apple's own jobs (`com.apple.*`) are never stopped. If the port is still in use,
+  `install` keeps the monitor, skips the responder, and exits with status 3.
+
+Each reinstall waits for launchd to finish unloading a job before loading it again.
+
+After loading the monitor, `install` writes the **removal grant**,
+`/etc/sudoers.d/exitipmonitor-tailscale-verge` (root:wheel, 0440, checked with
+`visudo -cf` before it is installed), for the user who ran `sudo` (or the console
+user). Like Sleepless's grant, it lets the cask's uninstall step run without a
+password. It allows exactly these commands, with these arguments:
+
+```text
+/bin/launchctl bootout system/com.example.exitipmonitor.tailscale-verge
+/bin/launchctl bootout system/com.example.exitipmonitor.tailscale-verge-http
+/bin/launchctl kickstart -k system/com.example.exitipmonitor.tailscale-verge
+/bin/rm -f /Library/LaunchDaemons/com.example.exitipmonitor.tailscale-verge.plist
+/bin/rm -f /Library/LaunchDaemons/com.example.exitipmonitor.tailscale-verge-http.plist
+/bin/rm -rf /Library/Application\ Support/ExitIPMonitor
+/bin/rm -f /etc/sudoers.d/exitipmonitor-tailscale-verge
+```
+
+Nothing can be loaded, started, or written through it. The plists and the script
+stay root-owned, so the grant can't change what runs.
+
+To disable the feature, run `remove`. It deletes the jobs, files, and grant, and writes
+`~/Library/Application Support/ExitIPMonitor/tailscale-verge-off` (as you, not as
+root). While that marker exists, Homebrew installs and reinstalls skip the daemon;
+`install` deletes it. With nothing serving, Mihomo keeps its last member until the
+feature is installed again. `brew uninstall` removes the daemon through the grant
+without a password; if that fails, it prints the one `sudo` command to finish.
+Deleting the app by hand doesn't remove the daemon; run `remove` first. To back out a
+daemon change, check out the earlier commit and run `install` again from the project
+directory.
+
+### Reasons
+
+`status.json` and the unified log report a reason code; the dashboard and the Event
+Log show it in plain words (`TailscaleVergeStatus.reasonText`):
+
+| Code | Shown as |
+| --- | --- |
+| `verified` | Direct on `utunN` |
+| `tailscale-not-installed` | Tailscale isn't installed |
+| `tailscale-cli-unavailable` | Tailscale isn't running or is logged out |
+| `tailscale-cli-timeout` | Tailscale didn't answer in time |
+| `no-tailscale-route` | Tailscale isn't connected |
+| `no-tailscale-ip` | Tailscale has no IPv4 address yet |
+| `no-console-user` | Nobody is logged in |
+| `interface-not-owned-by-tailscale` | That tunnel isn't Tailscale's |
+| `route-changed-during-check` | The route changed during the check |
+| `route-timeout`, `interface-timeout`, `route-recheck-timeout` | A check timed out |
+| `route-unavailable`, `interface-unavailable`, `route-recheck-unavailable` | A check failed |
+| `monitor-stale` | The monitor stopped updating |
+| `monitor-error` | The monitor's state can't be read |
+| `invalid-interface` | The reported tunnel is invalid |
+| `starting` | Starting up |
+
+Without Tailscale, the monitor only tests for the CLI every 2 seconds; it runs no
+`route`, `ifconfig`, or `sudo`.
+
+### Verge profile
+
+Clash Verge runs one profile at a time (a local file or a URL). The provider URL is
+not a profile: it goes **inside** that one profile, as a `proxy-providers` entry, and
+Mihomo fetches it from there every 3 seconds.
+
+**The app's full profile.** While the daemon is installed, the dashboard's **Clash
+Verge profile** group asks for your proxy: name, type (SOCKS5 or HTTP), server, port,
+username, and password. **Save Profile** stores those in the macOS Keychain (account
+`clash-verge-proxy`). It writes a complete Clash Verge profile to
+`~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml`, with mode
+0600: readable only by you, which includes Clash Verge, since it runs as you. The
+profile contains:
+
+- the settings, TUN, and DNS of the verified profile, including the `+.ts.net` →
+  `TS-DIRECT` policy (the controller `secret:` is left out; Clash Verge supplies its own);
+- your proxy;
+- the `tailscale-live` provider below;
+- the `Proxy` group (your proxy) and `TS-DIRECT` group;
+- the rules: Tailscale ranges, processes, and domains; private ranges; `MATCH,Proxy`.
+
+The app rewrites the file at launch and on Save, and never logs the proxy. Neither
+the app nor `daemon.sh` puts anything into Clash Verge. The dashboard's **Apply in
+Clash Verge** group lists these steps (labels as Clash Verge Rev shows them), with an
+**Open Clash Verge** button that only launches it:
+
+1. **Save Profile** writes the profile file.
+2. In Clash Verge: **Profiles** → **New**. In **Create Profile**, set Type to
+   **Local**, click **Choose File**, and pick `clash-verge-profile.yaml`. Then click
+   **Save**.
+3. Right-click the new profile → **Select**, to make it the active profile. Clash
+   Verge reloads once.
+4. Check **Proxies** → **Proxy Provider** → `tailscale-live` lists `TS-NATIVE`. The
+   dashboard's Tailscale status should read **Direct**.
+
+Clash Verge copies the file when you import it, so import it again after changing the
+proxy in the dashboard. Tailscale changes need nothing: they arrive through the
+provider every 3 seconds. The **provider file** itself
+(`/Library/Application Support/ExitIPMonitor/TailscaleVerge/provider.yaml`) is never
+imported. The profile's `tailscale-live` entry fetches it from
+`http://127.0.0.1:18766/provider.yaml`.
+
+**Remove** in the dashboard deletes the Keychain entry and the file; the profile
+Clash Verge imported is its own copy. Never commit real proxy addresses or
+credentials. The tests use RFC 5737 addresses and dummy values.
+
+**Merging into an existing profile instead.** To keep a profile of your own, merge
+these entries into it once (Profiles → right-click it → **Edit File**). Use one root
+`proxy-providers:` key and one root `proxy-groups:` key, add the `+.ts.net` line under
+your existing `dns: nameserver-policy`, then save and re-activate the profile. Keep
+your proxies, DNS, TUN settings, and rules as they are.
+The entries:
+
+```yaml
+proxy-providers:
+  tailscale-live:
+    type: http
+    url: "http://127.0.0.1:18766/provider.yaml"
+    path: ./proxy_providers/tailscale-live.yaml
+    interval: 3
+    proxy: DIRECT
+    health-check:
+      enable: false
+    payload:
+      - name: TS-NATIVE
+        type: reject
+
+proxy-groups:
+  # ...existing groups stay above this entry...
+  - name: TS-DIRECT
+    type: select
+    use:
+      - tailscale-live
+    empty-fallback: REJECT
+
+# The DNS policy refers to the stable group name:
+# dns:
+#   nameserver-policy:
+#     "+.ts.net":
+#       - "tcp://100.100.100.100:53#TS-DIRECT"
+```
+
+Don't add `provider.yaml` to Verge as a profile. **Profiles → New → Remote**, the dialog
+that asks for a User Agent, would make it a profile, but it isn't a configuration, and
+activating it would replace your whole config. The `proxy-providers` entry above
+already fetches it (no User Agent needed). To see it inside Verge, use **Proxies →
+Proxy Provider** (`tailscale-live`).
+
+### Dashboard and verification
+
+While the daemon is installed, the dashboard's **Tailscale → Clash Verge provider**
+group shows what Clash is served (for example **Direct on utun7**, or **Reject · The
+monitor stopped updating**) and when the monitor last checked. It shows
+the provider file's location, with **Open File** (read-only in TextEdit) and **Show in
+Finder**, and the address it is served at, with **Open in Browser** and
+**status.json**; both open inline in a browser. Its **Clash Verge** row shows
+**Installed** with **Open**, or that nothing uses the provider until Clash Verge Rev is
+installed. The dashboard reads the files every 2 seconds while open and never contacts
+the daemon.
+
+From Terminal (no `sudo`; Clash Verge Rev 2.5.8 creates the Mihomo socket owned by
+you):
+
+```bash
+curl -q --noproxy '*' -sS --max-time 3 http://127.0.0.1:18766/provider.yaml
+curl -q --noproxy '*' -sS --max-time 3 http://127.0.0.1:18766/status.json
+/sbin/route -n get 100.100.100.100
+
+mihomo_socket="/var/run/clash-verge-service/users/$(id -u)/verge-mihomo.sock"
+curl -q --noproxy '*' --unix-socket "$mihomo_socket" -sS --max-time 10 \
+  'http://localhost/providers/proxies/tailscale-live/TS-NATIVE'
+
+# Uncached probe: a unique name forces a new exchange with 100.100.100.100. SERVFAIL or
+# NXDOMAIN means Quad100 answered; EOF, "interface not found", or "network is unreachable"
+# means it did not. (Mihomo keeps serving cached, even expired, answers, so dig can mislead.)
+curl -q --noproxy '*' --unix-socket "$mihomo_socket" -sS --max-time 10 \
+  "http://localhost/dns/query?name=probe-$(date +%s).<your-tailnet>.ts.net&type=A"
+```
+
+When Tailscale is ready, `TS-NATIVE` is `Direct` with the interface that `route`
+reports. Check `type` and `interface`, not `alive`, and inspect the provider member
+rather than the `TS-DIRECT` group, whose own `interface` field is not the member's.
+State changes are logged to the unified log with the tag `exitip-tailscale-verge`:
+
+```bash
+log show --last 1h --info --predicate 'eventMessage CONTAINS "exitip-tailscale-verge"'
+```
+
+### Timing and limits
+
+- Updates take a few seconds: up to one 2-second check plus one 3-second provider
+  refresh. This is automatic recovery, not zero interruption. New connections use
+  the current member; existing long-lived connections cannot move to a new tunnel.
+- When the responder itself is not running (after `remove`, or while Mihomo starts
+  before the first refresh), Mihomo keeps its previous member. Don't treat `payload`
+  or `empty-fallback` as an expiry mechanism.
+- The CLI path is fixed to the standalone app,
+  `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. The port, poll interval, and
+  freshness limit are fixed too; there is no configuration file.
+- launchd's `inetdCompatibility` mode, which runs one responder per connection, is
+  documented as one to avoid for new projects. macOS 27's own `sshd` job still uses it.
+  At Mihomo's 3-second interval that is one short process every 3 seconds.
+- The monitor runs `sudo -u` for the CLI every 2 seconds. Where sudo logs each
+  command, expect one log line per check.
+- The first run of a newly installed or updated Tailscale app can take longer than
+  the 2-second limit while macOS checks it; that check reports `tailscale-cli-timeout`
+  and the next one recovers.
+- This is not a tailnet kill switch: traffic outside Mihomo's TUN still follows
+  native routing.
 
 ## Refresh recommendation
 
@@ -254,8 +543,10 @@ exit-ip-widget/
 ├── Sources/
 │   ├── ExitIPShared/             # Codable snapshot, shared App Group storage, providers, Keychain helper
 │   ├── ExitIPMonitorApp/         # Menu-bar app, monitor, dashboard/views, shared OpenIntent
-│   └── ExitIPMonitorWidgets/     # WidgetKit desktop widget and macOS 26 Control Widget
+│   ├── ExitIPMonitorWidgets/     # WidgetKit desktop widget and macOS 26 Control Widget
+│   └── ExitIPDaemon/             # Tailscale → Clash Verge root daemon (bash) and its installer
 ├── Tests/ExitIPSharedTests/      # Portable shared-core tests
+├── Tests/ExitIPDaemonTests/      # Bash tests for the daemon scripts (run.sh runs them all)
 ├── Configuration/                # App/extension entitlements and LSUIElement Info.plist
 ├── Scripts/check-build-environment.sh  # macOS/Xcode preflight and optional shared-core test
 ├── Scripts/install-standalone-swift.sh # Optional runtime download of a SwiftPM-only toolchain
@@ -397,6 +688,8 @@ The running app writes JSON-lines diagnostics to `~/Library/Application Support/
 | Event | Meaning |
 | --- | --- |
 | `monitor_started` / `monitor_stopped` | App launch and quit. |
+| `tailscale_provider_changed` | What the Tailscale → Clash Verge responder serves changed (`served` direct/reject, `interface`, `reason`). Recorded only on a change; the daemon's 2-second rewrites never add a record. The first reading after launch is recorded once. |
+| `clash_profile_written` | The app wrote `~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml` (`path` only; the proxy is never logged), at launch or on **Save Profile**. `clash_profile_write_failed` (`error`) reports a problem. |
 | `provider_health_changed` | Provider attempt/success/failure history is persisted for the Settings health panel. |
 | `refresh_requested` | A refresh was asked for. `trigger` is `startup`, `manual`, `periodic`, `network_path`, `network_configuration`, `route_change`, `system_wake`, `screens_wake`, `session_active`, `app_active`, `queued`, `trailing`, `retry`, `recheck`, `provider_changed`, or `settings_changed`. `urgency` is `manual`, `network_change`, `follow_up`, or `routine` (see [Lookup budget](#lookup-budget-prompt-checks-vs-api-limits)). |
 | `refresh_queued` | The request was deferred; `reason` is `provider_gap` (every enabled provider was called within 5 seconds) or `burst_budget` (no burst token; only ever with `urgency=follow_up`), `urgency` is kept for the queued lookup, and `notBefore` is when the single queued lookup runs. |
@@ -549,8 +842,8 @@ Changing a gateway, route, interface, system proxy, or enabling/disabling a TUN/
 | First launch and reopen | On a Mac that has never run the app, the first launch opens the dashboard. Quit and relaunch: only the menu-bar item appears. Open the app again from Finder while it runs: the dashboard comes forward. |
 | First launch | Menu label changes from `Locating` to the selected country display after an immediate check. Dashboard shows public IP, provider data, absolute **Last updated** time, and relative age. |
 | Menu settings | Switching among name, country code, flag, and flag+name immediately changes the menu-bar item; a stale result is labeled after twice the selected interval. |
-| Open Settings | The gear button in the popover and the **Settings** button in the dashboard both open or bring forward the **Exit IP Settings** window. The Dock icon disappears only after both the dashboard and settings windows are closed. Launching the app opens no settings window on its own. |
-| Open Dashboard | Selecting **Open Dashboard** from the menu-bar popover opens or brings forward the separate **Exit IP Dashboard** window. Close it, then select the command again; it should reappear. |
+| Open Settings | The gear button in the popover and the **Settings** button in the dashboard both open or bring forward the **Exit IP Settings** window, at full size with every section visible (never a bare title bar). The Dock icon disappears only after both the dashboard and settings windows are closed. Launching the app opens no settings window on its own. |
+| Open Dashboard | Selecting **Open Dashboard** from the menu-bar popover opens or brings forward the separate **Exit IP Dashboard** window, in two columns with every group visible and no scroll bar. Narrowing it below about 900 points stacks the columns. Close it, then select the command again; it should reappear. |
 | Manual refresh | Selecting **Refresh now** in the dashboard or menu-bar popover fetches the current public IP at once. Pressing it again within five seconds uses the next pool provider (`provider_rotated_spacing`); only with a single-provider pool does it display the queued time and run at the five-second boundary. |
 | Proxy, gateway, route, or TUN/VPN change | Change a macOS proxy setting, switch Wi-Fi/Ethernet (new gateway), connect/disconnect a TUN/VPN, or toggle a TUN tool's routes. The log shows `refresh_requested` with `trigger` `network_configuration` or `route_change`, and a lookup starts at once (no debounce). Follow-up events log `refresh_event_merged`, and about five seconds later one `refresh_requested` with `trigger=trailing` runs on a different provider. A confirmed country difference creates a yellow highlight for 10 minutes. |
 | Timer cadence | A 15-minute periodic timer always forces the due lookup; a one-second timing offset cannot cause an extra 15-minute skip. |
@@ -573,8 +866,15 @@ Changing a gateway, route, interface, system proxy, or enabling/disabling a TUN/
 | Provider diagnostics | Use the Settings **Diagnostics** section to keep IPs redacted by default and choose 1, 7, or 30-day log retention. Run `bash Scripts/check-signed-build.sh` against the built app to inspect signing, App Group, and embedded widget-extension status. |
 | Debug simulations | In a DEBUG build, run each Settings simulation for transport failure, malformed response, rate limit, country disagreement, and exit IP not on the allowlist; verify the corresponding UI/log state (for example, the allowlist simulation shows the orange **Exit IP not on the allowlist** notice while the menu bar keeps the country), then clear it. Clearing re-evaluates the real allowlist state. |
 | Allowlist warning | Add an address that differs from the current exit IP. The **Exit IP Not Allowed** window opens once (`allowlist_warning_presented`), the popover and dashboard show the orange notice, and the menu bar still shows the country (never `Exit IP error`). Refreshing with the same IP does not reopen the window. Add the current IP or empty the list; the window closes and the notice disappears (`allowlist_warning_cleared`). The connection is never blocked. |
+| Tailscale → Clash Verge provider | `bash Tests/ExitIPDaemonTests/run.sh` passes. After `sudo /bin/bash Sources/ExitIPDaemon/daemon.sh install`, `daemon.sh status` lists both jobs as loaded, `status.json` reports `direct`, `verified`, and the interface `route -n get 100.100.100.100` shows, `provider.yaml` on disk equals the served bytes, and the Mihomo member `tailscale-live/TS-NATIVE` is `Direct` on that interface with the same core PID. Disconnect and reconnect from the Tailscale menu: the member goes Direct → Reject → Direct without a profile reload, and the uncached DNS probe answers again. Stop the monitor (`sudo launchctl bootout system/com.example.exitipmonitor.tailscale-verge`): about 12 seconds later the responder serves Reject with `monitor-stale`; reinstalling restores Direct. After a restart, the log shows `no-console-user` until login, then `verified`. `daemon.sh remove` frees the port. |
+| Homebrew daemon install and grant | After `rm -f "$(brew --cache --cask jxz345/tap/exit-ip-monitor)" && brew reinstall --cask jxz345/tap/exit-ip-monitor` (one password prompt), the output has the preflight lines (`Tailscale: installed.`, `Clash Verge Rev: installed.`) and `Removal grant installed for <you>`. Both plists exist, `/Library/Application Support/ExitIPMonitor/tailscale-verge.sh` equals the bundle's `Contents/Resources/tailscale-verge.sh`, and `/etc/sudoers.d/exitipmonitor-tailscale-verge` is root:wheel 0440. `sudo -n -l <command>` prints each of the seven granted commands without a password, and `sudo visudo -c` passes. A second reinstall runs the new uninstall step: no `Could not remove` text, and the daemon is back after the postflight. After `daemon.sh remove`, a reinstall skips the daemon (marker `~/Library/Application Support/ExitIPMonitor/tailscale-verge-off`); `daemon.sh install` deletes the marker. |
+| Missing Tailscale or Clash Verge Rev | `bash Tests/ExitIPDaemonTests/run.sh` covers both with stubs: the preflight's four combinations, and a missing CLI makes the monitor write `tailscale-not-installed` without running `route`, `ifconfig`, or `sudo`. `xcrun swift test` checks every reason's plain words. On a Mac without Tailscale the dashboard reads **Reject · Tailscale isn't installed** and the Event Log one `Tailscale provider · Reject (Tailscale isn't installed)` line; without Clash Verge Rev the **Clash Verge** row and **Apply in Clash Verge** say to install it. |
+| Event Log | **Event Log…** in Monitoring opens **Exit IP Event Log**: one line per important event, UTC times, newest last. **Refresh now** adds `Check · Refresh now · …` then `Lookup OK · …` live; toggling Wi-Fi or a proxy adds `Check · network settings changed` or `route changed`. With Tailscale steady for minutes, no new Tailscale lines appear; a Disconnect/Connect adds exactly one `Tailscale provider · Reject (…)` and one `Tailscale provider · Direct utun7`. **Copy All** copies the lines; **Show Log Files** opens the Logs folder. |
+| Error stop icon | Run the DEBUG transport-failure simulation: the menu bar, popover, and dashboard header show the stop icon instead of the flag, and the widget shows it in its error placeholder. Clearing restores the flag after the next successful lookup. |
+| Dashboard provider group | With the daemon installed, the dashboard shows **Tailscale → Clash Verge provider** with the status in plain words, last check, provider file path, `http://127.0.0.1:18766/provider.yaml`, and **Clash Verge: Installed** with **Open**. **Open File** opens the YAML in TextEdit, **Show in Finder** selects it, **Open in Browser** shows the YAML inline (not a download) and **status.json** shows the JSON. The status follows a Tailscale disconnect within a few seconds. Without the daemon the group is absent. |
+| Clash Verge profile | With the daemon installed, enter a proxy in **Clash Verge profile** (try an invalid port: an orange message, nothing saved), then **Save Profile**. The file `~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml` is mode 0600, the log shows `clash_profile_written` with no proxy details, and relaunching the app reloads the form from the Keychain. Following **Apply in Clash Verge** (Profiles → New → Create Profile → Local → Choose File → Save, then right-click → Select), `TS-NATIVE` is `Direct` on the routed utun and `MATCH,Proxy` traffic leaves through the proxy. **Remove** deletes the Keychain entry and the file. |
 | Liquid Glass accessibility | On macOS 26+, check light/dark appearance plus Reduce Transparency, Increase Contrast, and Reduce Motion. Standard controls and `GroupBox` retain a coherent system appearance without custom glass overlays. |
-| Build preflight | `bash Scripts/check-build-environment.sh` reports no failures; `bash Scripts/check-build-environment.sh --test` completes the shared-core tests on the build Mac. |
+| Build preflight | `bash Scripts/check-build-environment.sh` reports no failures; `bash Scripts/check-build-environment.sh --test` completes the shared-core tests and the daemon script tests on the build Mac. |
 
 Run portable shared-core tests from the **source-kit root**, not from Downloads, not from `XcodeProject`, and not from a folder containing only a copied script:
 

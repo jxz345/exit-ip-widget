@@ -173,6 +173,8 @@ for required_path in \
     "$KIT_ROOT/Sources/ExitIPShared/AppGroupIdentifier.swift" \
     "$KIT_ROOT/Sources/ExitIPMonitorApp/ExitIPMonitorApp.swift" \
     "$KIT_ROOT/Sources/ExitIPMonitorWidgets/ExitIPControl.swift" \
+    "$KIT_ROOT/Sources/ExitIPDaemon/daemon.sh" \
+    "$KIT_ROOT/Sources/ExitIPDaemon/tailscale-verge.sh" \
     "$KIT_ROOT/Configuration/ExitIPMonitor-Info.plist" \
     "$KIT_ROOT/Configuration/ExitIPMonitorWidgets-Info.plist" \
     "$KIT_ROOT/Configuration/ExitIPMonitor.entitlements" \
@@ -264,7 +266,7 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "2"
 targets:
   ExitIPMonitor:
     type: application
@@ -273,6 +275,10 @@ targets:
     sources:
       - path: Sources/ExitIPShared
       - path: Sources/ExitIPMonitorApp
+      # The optional Tailscale → Clash Verge daemon ships as bundle resources:
+      # sudo /bin/bash ExitIPMonitor.app/Contents/Resources/daemon.sh install
+      - path: Sources/ExitIPDaemon
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $BUNDLE_ID

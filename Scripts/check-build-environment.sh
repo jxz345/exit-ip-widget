@@ -287,6 +287,12 @@ if (( run_tests == 1 )); then
         else
             fail "Shared-core tests failed. The first earlier error: line in $test_log is actionable; the final Build failed and fatalError lines are summaries."
         fi
+        printf 'Running: bash Tests/ExitIPDaemonTests/run.sh\n'
+        if /bin/bash "$PROJECT_ROOT/Tests/ExitIPDaemonTests/run.sh"; then
+            pass "Daemon script tests passed."
+        else
+            fail "Daemon script tests failed. The first FAIL: line above names the check."
+        fi
     else
         warn "Skipped swift test until the full Xcode and source-kit checks pass."
     fi

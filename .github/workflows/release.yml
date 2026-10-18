@@ -45,6 +45,9 @@ jobs:
           xcodebuild -version
           echo "SDK: $(xcrun --sdk macosx --show-sdk-version)"
 
+      - name: Daemon script tests
+        run: bash Tests/ExitIPDaemonTests/run.sh
+
       - name: Build the zip, package, install.sh, and SHA256SUMS
         env:
           EXIT_IP_RELEASE_REPO: ${{ github.repository }}
