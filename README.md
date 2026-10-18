@@ -25,7 +25,9 @@ It is a menu-bar app. The dashboard opens on the first launch, and again wheneve
 
 The release is ad-hoc signed and not notarized; notarizing needs a paid Apple Developer account. Homebrew also keeps the download quarantine, because its `--no-quarantine` option is deprecated. So macOS checks the first launch with Gatekeeper: approve it in **System Settings → Privacy & Security → Open Anyway**.
 
-On macOS 27, the launch can stall instead. The process starts but stays at `_dyld_start`, syspolicyd logs `Prompt shown … waiting for response`, no flag appears, and **Open Anyway** is missing or does nothing. Quit the stalled app, verify the installed copy, and remove quarantine from this one app. The cask prints the same steps:
+On macOS 27, the launch can stall instead. The process starts but stays at `_dyld_start`, syspolicyd logs `Prompt shown … waiting for response`, no flag appears, and **Open Anyway** is missing or does nothing.
+
+To recover, first close any **"ExitIPMonitor" Not Opened** dialog by clicking **Done**. While macOS still waits on that dialog, or on a Gatekeeper evaluation stuck after **Open Anyway**, every later launch of the same build waits too, even without quarantine. Then quit the stalled app, verify the installed copy, and remove quarantine from this one app. The cask prints the same steps:
 
 ```sh
 pkill -x ExitIPMonitor
@@ -34,9 +36,11 @@ xattr -dr com.apple.quarantine /Applications/ExitIPMonitor.app
 open /Applications/ExitIPMonitor.app
 ```
 
+If the app still hangs after those commands, **restart the Mac**, which ends any evaluation still pending, and run `open /Applications/ExitIPMonitor.app` again.
+
 If `xattr` reports **Operation not permitted**, allow the app running the command (Terminal, or Visual Studio Code for its terminal) under **Privacy & Security → App Management**, then retry. This follows the approach of [Sleepless](https://github.com/jxz345/Sleepless), whose UPDATE_NOTES §8 records the investigation.
 
-If the app still hangs after those commands, check whether the copy carries another Mac's provenance stamp:
+If it hangs even after a restart, check whether the copy carries another Mac's provenance stamp:
 
 ```sh
 xattr -px com.apple.provenance /Applications/ExitIPMonitor.app/Contents/MacOS/ExitIPMonitor

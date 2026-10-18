@@ -27,8 +27,9 @@ approve the first launch in **System Settings → Privacy & Security → Open An
 dashboard opens on first launch, and the country flag is in the menu bar.
 
 If the launch hangs (the process starts but no flag appears) or **Open Anyway** is missing or
-does nothing, which happens on macOS 27, quit the app, verify it, and remove quarantine for
-this app only:
+does nothing, which happens on macOS 27, first close any "ExitIPMonitor" Not Opened dialog with
+**Done**. Later launches wait while that dialog or a stuck evaluation is pending. Then quit the
+app, verify it, and remove quarantine for this app only:
 
 ```sh
 pkill -x ExitIPMonitor
@@ -37,6 +38,7 @@ xattr -dr com.apple.quarantine /Applications/ExitIPMonitor.app
 open /Applications/ExitIPMonitor.app
 ```
 
+If it still hangs, restart the Mac (this ends any pending evaluation) and open the app again.
 If `xattr` reports **Operation not permitted**, allow your terminal (Terminal, or Visual
 Studio Code) under **Privacy & Security → App Management**, then retry.
 
