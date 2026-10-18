@@ -266,7 +266,7 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "2"
+    CURRENT_PROJECT_VERSION: "3"
 targets:
   ExitIPMonitor:
     type: application
@@ -278,6 +278,8 @@ targets:
       # The optional Tailscale → Clash Verge daemon ships as bundle resources:
       # sudo /bin/bash ExitIPMonitor.app/Contents/Resources/daemon.sh install
       - path: Sources/ExitIPDaemon
+        buildPhase: resources
+      - path: Sources/ExitIPDiagnostics
         buildPhase: resources
     settings:
       base:

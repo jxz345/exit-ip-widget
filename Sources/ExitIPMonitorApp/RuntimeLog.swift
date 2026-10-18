@@ -91,7 +91,9 @@ final class RuntimeLog: @unchecked Sendable {
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
         ) else { return }
-        for file in files where file.lastPathComponent.hasPrefix("runtime-") && file.pathExtension == "jsonl" {
+        for file in files where
+            (file.lastPathComponent.hasPrefix("runtime-") && file.pathExtension == "jsonl") ||
+            (file.lastPathComponent.hasPrefix("launch-") && file.pathExtension == "json") {
             guard let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
                   modified < cutoff else { continue }
             try? FileManager.default.removeItem(at: file)

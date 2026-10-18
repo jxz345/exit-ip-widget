@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
-# Installs Exit IP Monitor from the release package (.pkg) and launches it, without
-# Installer or Gatekeeper.
+# Installs Exit IP Monitor from the verified release package and checks app readiness.
 #
 #   bash install.sh                      # uses a downloaded ExitIPMonitor-<version>.pkg, or downloads it
 #   bash install.sh ~/Downloads/ExitIPMonitor-<version>.pkg
 #   curl -fsSL <release URL>/install.sh | bash      # public repository only
 #
-# The package and app are not notarized. A browser or AirDrop download is
-# quarantined, so macOS holds it for Gatekeeper approval (Open Anyway). That
-# prompt can fail to appear. This installer checks the package's SHA-256 and the
-# app's signature, unpacks the app from the package, installs it without the
-# quarantine flag, and launches it, so no prompt comes up.
+# The package and app are not notarized. Normal macOS approval may be needed.
+# This installer never changes quarantine or system-wide security settings.
 #
 # Where the package comes from, in order:
 #   1. the path given as the first argument;
@@ -25,6 +21,8 @@
 # (default /Applications, or ~/Applications when /Applications is not writable).
 
 set -euo pipefail
+
+# @COMMAND_SUPPORT@
 
 RELEASE_REPO="@RELEASE_REPO@"
 VERSION="@VERSION@"
@@ -47,12 +45,18 @@ else
     install_dir="$HOME/Applications"
 fi
 app_path="$install_dir/$APP_NAME"
+umask 077
+log_dir="${EXIT_IP_LOG_DIRECTORY:-$HOME/Library/Application Support/ExitIPMonitor/Logs}"
+mkdir -p "$log_dir"
+install_log=$(new_step_log "$log_dir" install)
+exec > >(tee -a "$install_log") 2>&1
+step_log INFO "Installer log: $install_log"
 
 printf '== Exit IP Monitor %s installer ==\n' "$VERSION"
 printf 'macOS %s (%s)\n' "$(sw_vers -productVersion)" "$(uname -m)"
 
 work="$(mktemp -d -t exit-ip-install)"
-trap 'rm -rf "$work"' EXIT
+trap 'status=$?; step_log END "Installer status=$status elapsed=${SECONDS}s; log: $install_log"; rm -rf "$work"' EXIT
 
 sha_of() { shasum -a 256 "$1" | awk '{print $1}'; }
 
@@ -82,11 +86,11 @@ fi
 if [[ -z "$source_file" ]]; then
     printf '\nDownloading %s\n' "$PKG_URL"
     source_file="$work/$PKG_NAME"
-    if ! curl -fsSL --retry 2 -o "$source_file" "$PKG_URL" 2>"$work/curl.err"; then
+    if ! bounded_command 150 download curl -fsSL --connect-timeout 10 --max-time 40 --retry 2 -o "$source_file" "$PKG_URL" 2>"$work/curl.err"; then
         printf 'curl could not download it: %s\n' "$(grep -o 'curl: .*' "$work/curl.err" | tail -1)"
         if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
             printf 'Downloading with gh instead...\n'
-            gh release download "v$VERSION" -R "$RELEASE_REPO" -p "$PKG_NAME" -D "$work" --clobber \
+            bounded_command 120 github-download gh release download "v$VERSION" -R "$RELEASE_REPO" -p "$PKG_NAME" -D "$work" --clobber \
                 || fail "gh could not download $PKG_NAME from $RELEASE_REPO."
         else
             fail "The release could not be downloaded; a private repository needs a GitHub login.
@@ -104,11 +108,11 @@ printf '\nUsing: %s\n' "$source_file"
 [[ "$(sha_of "$source_file")" == "$PKG_SHA256" ]] \
     || fail "SHA-256 of $source_file does not match release $VERSION. Download it again."
 printf 'PASS  SHA-256 matches.\n'
-pkgutil --expand-full "$source_file" "$work/expanded" >/dev/null || fail "Could not unpack $source_file."
+bounded_command 60 unpack pkgutil --expand-full "$source_file" "$work/expanded" || fail "Could not unpack $source_file."
 new_app="$(find "$work/expanded" -maxdepth 4 -name "$APP_NAME" -type d | head -1)"
 [[ -n "$new_app" ]] || fail "$APP_NAME is missing from $source_file."
 [[ -d "$new_app" ]] || fail "$APP_NAME is missing from $source_file."
-codesign --verify --deep --strict "$new_app" || fail "The app's signature does not verify."
+bounded_command 15 signature codesign --verify --deep --strict "$new_app" || fail "The app's signature does not verify."
 printf 'PASS  Signature verifies.\n'
 
 if pgrep -x "$PROCESS_NAME" >/dev/null; then
@@ -131,35 +135,12 @@ if [[ -e "$app_path" ]]; then
     rm -rf "$app_path" || fail "Could not replace $app_path.
 $app_management_hint"
 fi
-ditto "$new_app" "$app_path" || fail "Could not copy the app to $install_dir.
+bounded_command 60 copy ditto "$new_app" "$app_path" || fail "Could not copy the app to $install_dir.
 $app_management_hint"
-xattr -dr com.apple.quarantine "$app_path" 2>/dev/null || true
 printf 'PASS  Installed: %s\n' "$app_path"
 
-open "$app_path"
-for _ in $(seq 1 20); do
-    pgrep -x "$PROCESS_NAME" >/dev/null && break
-    sleep 0.5
-done
-
-if pgrep -x "$PROCESS_NAME" >/dev/null; then
-    printf '\nSUCCESS  Exit IP Monitor is running. Its dashboard opens on first launch, and its flag is in the menu bar.\n'
-    printf 'If the flag is hidden behind the notch, open the app again from Applications to show the dashboard.\n'
+if /bin/bash "$app_path/Contents/Resources/diagnose-launch.sh" --app "$app_path" --launch --timeout 60; then
+    step_log PASS "Exit IP Monitor completed startup and its main thread is responding."
     exit 0
 fi
-
-printf '\nFAILED  The app did not start. Please send everything below:\n' >&2
-{
-    printf -- '--- signature\n'
-    codesign -dvv "$app_path" 2>&1 | grep -E 'Format|flags|Sealed|Info.plist' || true
-    codesign --verify --deep --strict "$app_path" 2>&1 && printf 'verifies\n'
-    printf -- '--- attributes\n'
-    xattr -l "$app_path" 2>&1 || true
-    printf -- '--- gatekeeper\n'
-    spctl -a -vv -t exec "$app_path" 2>&1 || true
-    printf -- '--- system log (last minute)\n'
-    /usr/bin/log show --last 1m --style compact \
-        --predicate 'process == "ExitIPMonitor" OR (process == "syspolicyd" AND eventMessage CONTAINS[c] "exitip")' 2>/dev/null \
-        | grep -E ' E | F |rror|deny|Prompt|crash' | tail -20 || true
-} >&2
-exit 1
+fail "The app was installed but did not become ready. See the diagnostic directory printed above."

@@ -14,9 +14,8 @@
 # v<version> of the origin remote (set EXIT_IP_RELEASE_REPO=owner/repo to override).
 #
 # Publish releases from .github/workflows/release.yml (push a v<version> tag), not from a
-# local run: on a developer Mac, files can carry that Mac's com.apple.provenance stamp, which
-# stalls the app's launch on every other Mac. The script warns locally and fails in CI when
-# the zip or package carries extended attributes.
+# local run. The script checks for unwanted archive metadata; a locally created
+# com.apple.provenance attribute alone does not diagnose a Gatekeeper failure.
 
 set -euo pipefail
 
@@ -130,17 +129,17 @@ if [[ -n "$release_repo" ]]; then
     sed -e "s|@RELEASE_REPO@|$release_repo|" \
         -e "s|@VERSION@|$version|" \
         -e "s|@PKG_SHA256@|$pkg_sha|" \
-        "$SCRIPT_DIR/install-release.sh" > "$install_path"
+        "$SCRIPT_DIR/install-release.sh" | awk -v support="$KIT_ROOT/Sources/ExitIPDiagnostics/command-support.sh" '
+            /^# @COMMAND_SUPPORT@$/ { while ((getline line < support) > 0) print line; close(support); next }
+            { print }
+        ' > "$install_path"
     chmod +x "$install_path"
 else
     printf 'WARN  No GitHub origin remote; skipping install.sh (set EXIT_IP_RELEASE_REPO=owner/repo).\n'
 fi
 
-# Released files must carry no extended attributes. A process macOS tracks stamps every file it
-# writes with this Mac's com.apple.provenance, a key into this Mac's Gatekeeper database. On
-# another Mac the key is foreign, `xattr -d` cannot remove it (the kernel manages it), and the
-# app stalls at launch even after quarantine removal. Archives keep attributes as AppleDouble
-# "._" entries; the pkg payload can't be cleaned here because the staged copy is re-stamped.
+# Keep release archives free of AppleDouble metadata. This is archive hygiene, not a
+# Gatekeeper readiness test: macOS may add provenance locally after extraction.
 apple_double='(^|/)\._|^__MACOSX/'
 stamped=()
 (( $(zipinfo -1 "$zip_path" | grep -cE "$apple_double" || true) == 0 )) || stamped+=("$(basename "$zip_path")")
@@ -150,10 +149,10 @@ if (( ${#stamped[@]} > 0 )); then
         printf 'ERROR Extended attributes (AppleDouble entries) in: %s\n' "${stamped[*]}" >&2
         exit 1
     fi
-    printf 'WARN  Extended attributes, likely this Mac'"'"'s provenance stamps, in: %s\n' "${stamped[*]}"
-    printf '      Use these files only on this Mac; publish releases from .github/workflows/release.yml.\n'
+    printf 'WARN  AppleDouble metadata in: %s\n' "${stamped[*]}"
+    printf '      Publish releases from .github/workflows/release.yml.\n'
 else
-    printf 'PASS  No extended attributes in the zip or package.\n'
+    printf 'PASS  No AppleDouble entries in the zip or package.\n'
 fi
 
 (

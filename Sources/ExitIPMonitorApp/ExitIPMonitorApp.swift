@@ -6,13 +6,16 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
     static let monitor = PublicIPMonitor()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        LaunchDiagnostics.record("application_did_finish_launching")
         Self.monitor.start()
+        LaunchDiagnostics.record("startup_profile_begin")
         do {
             try maintainClashVergeProfile()
         } catch {
             RuntimeLog.shared.error("clash_profile_write_failed", fields: ["error": error.localizedDescription])
         }
         TailscaleVergeWatcher.shared.start()
+        LaunchDiagnostics.record("startup_services_ready")
         // The app is menu-bar only, and a crowded menu bar can hide its item, so the very first
         // launch opens the dashboard once to show the app is running.
         let defaults = ExitIPAppGroup.defaults
@@ -20,6 +23,8 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
             defaults.set(true, forKey: ExitIPPreferenceKey.firstLaunchDashboardShown)
             Self.showDashboard()
         }
+        // Schedule after the launch callback so readiness proves the main queue is servicing work.
+        DispatchQueue.main.async { LaunchDiagnostics.markReady() }
     }
 
     /// Opening the app again while it runs (Finder, Spotlight, Launchpad, `open`) shows the
@@ -34,6 +39,7 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        LaunchDiagnostics.stop()
         Self.monitor.stop()
     }
 
@@ -121,6 +127,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         placeOnActiveScreen(window)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+        LaunchDiagnostics.record("dashboard_presented")
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -203,7 +210,6 @@ func placeOnActiveScreen(_ window: NSWindow) {
                            width: size.width, height: size.height), display: false)
 }
 
-@main
 @MainActor
 struct ExitIPMonitorApp: App {
     @NSApplicationDelegateAdaptor(ExitIPAppDelegate.self) private var appDelegate
@@ -212,6 +218,7 @@ struct ExitIPMonitorApp: App {
     // Settings live in `SettingsWindowController`, not a SwiftUI `Settings` scene: that scene
     // opened its own window at every launch and couldn't be foregrounded from the popover.
     init() {
+        LaunchDiagnostics.record("app_initialized")
         let sharedMonitor = ExitIPAppDelegate.monitor
         _monitor = StateObject(wrappedValue: sharedMonitor)
         sharedMonitor.start()

@@ -50,6 +50,11 @@ LOADED_FOR=1000 BOOTOUT_TICKS=3
 rm -f "$FIXTURE/prints"
 if bootout_wait "$LABEL" 2>/dev/null; then echo "FAIL: bootout_wait ignored its deadline"; exit 1; fi
 echo "PASS: bootout_wait fails after its deadline"
+run() { return 124; }
+if bootout_wait "$LABEL" >/dev/null 2>&1; then echo "FAIL: bootout timeout reported success"; exit 1; fi
+run() { [ "$2" = bootout ] && return 0; return 124; }
+if bootout_wait "$LABEL" >/dev/null 2>&1; then echo "FAIL: print timeout treated as an unloaded job"; exit 1; fi
+echo "PASS: command timeouts cannot be mistaken for a successfully unloaded job"
 unset -f run
 run() { "$@"; }
 

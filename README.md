@@ -33,7 +33,7 @@ Neither app is required. Without Tailscale the daemon runs and serves Reject, an
 | Turn the daemon off (stays off across reinstalls) | `sudo /bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/daemon.sh remove` |
 | Turn it back on | `sudo /bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/daemon.sh install` |
 
-v1.0 was rebuilt as 1.0 (2) with the daemon. Homebrew doesn't offer a rebuild with the same version as an upgrade, so a Mac with the first 1.0 build needs the reinstall command above. It removes the cached download first; otherwise Homebrew reports a SHA-256 mismatch.
+v1.0 was rebuilt as 1.0 (3) with launch verification and installation diagnostics. Homebrew doesn't offer a rebuild with the same version as an upgrade, so a Mac with the first 1.0 build needs the reinstall command above. It removes the cached download first; otherwise Homebrew reports a SHA-256 mismatch.
 
 ### First launch
 
@@ -54,21 +54,55 @@ If the app still hangs after those commands, **restart the Mac**, which ends any
 
 If `xattr` reports **Operation not permitted**, allow the app running the command (Terminal, or Visual Studio Code for its terminal) under **Privacy & Security → App Management**, then retry. This follows the approach of [Sleepless](https://github.com/jxz345/Sleepless), whose UPDATE_NOTES §8 records the investigation.
 
-If it hangs even after a restart, check whether the copy carries another Mac's provenance stamp:
+A `com.apple.provenance` attribute is not evidence that a build came from another Mac.
+macOS can create it locally during Gatekeeper evaluation. The current release is built on
+GitHub Actions; verify the download checksum and signature to identify the installed build.
+Do not delete security databases or disable Gatekeeper to diagnose this problem.
+
+### Launch diagnostics
+
+The installer checks a live response from the app's main thread, its bundle path, PID,
+version, and build (including a macOS App Translocation copy with the same verified signature). Merely appearing in Activity Monitor is not success. To launch and verify:
 
 ```sh
-xattr -px com.apple.provenance /Applications/ExitIPMonitor.app/Contents/MacOS/ExitIPMonitor
+/bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/diagnose-launch.sh --launch --timeout 60
 ```
 
-**`com.apple.provenance`** is a key into a Mac's own Gatekeeper database, and the kernel won't let `xattr` remove it. If a value prints, that copy came from an early build of v1.0 that was made on a developer Mac. On other Macs, that build's stamp stalled the launch however it was installed. To replace it:
+Omit `--launch` to inspect the existing process without opening another copy. From a source
+checkout use `bash Scripts/check-launch.sh`. `--app PATH` selects another bundle and
+`--output DIR` selects a diagnostic directory. A successful check exits 0; a failed signature
+or missing/stale readiness response exits 1; invalid arguments exit 2.
 
-1. Run `brew uninstall --cask jxz345/tap/exit-ip-monitor`, and delete any other copies.
-2. Restart the Mac. This clears the stuck launch.
-3. Run `brew update && brew install --cask jxz345/tap/exit-ip-monitor`.
+Each check prints its progress and local output directory under
+`~/Library/Application Support/ExitIPMonitor/Logs/launch-check-*`. On failure it saves bounded
+signature, attribute, app-specific security-log and process-sample checks. A sample stuck at
+`_dyld_start + 0` means execution has not reached app startup. A startup record without
+`app_ready` identifies the last completed app stage. The main thread refreshes its readiness
+record every two seconds; a record more than eight seconds old is rejected.
 
-Current releases are built on a clean GitHub runner and carry no stamps.
+The release installer saves `install-*` in the same Logs folder. Root daemon setup saves
+`/Library/Logs/ExitIPMonitor/daemon-install-*` and removal saves `daemon-remove-*`.
+Step logs include UTC time, duration, timeout and exit status. These diagnostics stay local;
+they exclude Keychain values and proxy configuration. Review paths before sharing them.
+The launch checker never changes quarantine, signatures, or system security settings.
 
 If macOS says the app **is damaged and can't be opened**, the copy predates the current release and has only a partial signature. Install the current release.
+
+### Investigation of the 1.0 (2) launch stall
+
+The installed build matched the published ZIP byte-for-byte and passed strict signature
+verification. Its stalled process had a 96 KB footprint and sampled only `_dyld_start + 0`;
+no application startup code had executed. The daemon was healthy. macOS security logs showed
+an approval/authentication request without a completion in the captured interval, and a
+local provenance write. These observations locate the failure before app startup; they do
+not prove a damaged download, an extension fault, or a universal-binary fault.
+
+A fresh build with the same signing policy, both architectures and the widget extension
+passed normal **Open Anyway** approval with quarantine retained. The app reached readiness
+and completed an IP lookup. The checker also handles App Translocation after validating
+that the running copy has the installed app's code identity and a valid sealed bundle.
+A fresh build identity replaces the stuck build; diagnostics expose any future recurrence
+instead of reporting a suspended process as a successful launch.
 
 ### Without Homebrew
 
@@ -88,10 +122,10 @@ Each [release](https://github.com/jxz345/exit-ip-widget/releases) also has an In
   The script:
   - downloads the package with `curl`, which adds no quarantine, and checks its SHA-256 and the app's signature;
   - quits a running copy;
-  - installs to `/Applications` without quarantine, or to `~/Applications` if `/Applications` isn't writable;
-  - launches the app.
+  - installs to `/Applications`, or to `~/Applications` if `/Applications` isn't writable;
+  - launches the app and waits up to 60 seconds for a fresh main-thread readiness response.
 
-  With the package already in Downloads, `bash ~/Downloads/install.sh` uses the newest matching `ExitIPMonitor-<version>*.pkg` there instead; browsers save repeat downloads as `… (1).pkg`. Run it with `bash`, because a quarantined script run directly can be blocked. If replacing the app fails with **Operation not permitted**, allow the terminal under **App Management**. If the app doesn't start, the script prints signature, quarantine, Gatekeeper, and system-log details.
+  With the package already in Downloads, `bash ~/Downloads/install.sh` uses the newest matching `ExitIPMonitor-<version>*.pkg` there instead; browsers save repeat downloads as `… (1).pkg`. Run it with `bash`, because a quarantined script run directly can be blocked. If replacing the app fails with **Operation not permitted**, allow the terminal under **App Management**. If the app does not become ready, it exits with an error and prints the directory containing bounded launch diagnostics.
 - **A copied app**, for example one sent by AirDrop, is quarantined and can stall the same way. Use the recovery commands above.
 
 ### What the downloaded build can't do
@@ -122,11 +156,12 @@ The implementation follows Apple’s Liquid Glass guidance for macOS 26+ without
 | **Desktop / Notification Center widget** | Small: flag, country code/name, age. **Medium (recommended for quick inspection):** country, IP, city/region when supplied, organization, relative update time, stale marker, and country-change banner — all without opening the app. |
 | **Control Center (macOS 26+)** | A resizable `ControlWidgetButton` shows a compact title in the form **`JP · 203.0.113.8 · 1:45 PM`** (with ` · stale` appended when the data is older than twice the refresh interval) plus an alert symbol after a confirmed country change or while the location is hidden by an error. Resize the tile in Control Center for the system to expose more title/value space. Tapping opens the dashboard, but the country code, current public IP, and last-update time are visible without opening it. |
 | **Dashboard / popover** | The dashboard opens by itself on the app's **first launch** and whenever the app is **opened again while it is running** (Finder, Spotlight, `open`). The app is otherwise menu-bar only, and a crowded menu bar can hide its item. The **dashboard** opens at about 1000 × 780 in two columns, so everything fits without scrolling; a narrow window stacks the columns and scrolls only as a last resort. Notices (allowlist, error, country change) and the header (flag, country, IP, **Refresh now**) span the full width. The left column shows the current exit IP (public IP, country, city/region/timezone when the provider supplies it, ASN/organization, provider (**Source**), and **Last updated** as an absolute time plus relative age), the allowlist, and, while the Tailscale daemon is installed, **Clash Verge profile**: the proxy form, **Save Profile** / **Remove**, and the generated profile's location. In the right column, **Apply in Clash Verge** lists the import steps with an **Open Clash Verge** button. The right column has **Monitoring** and, when installed, the Tailscale provider. Every group uses one label column, shows each path or URL on one line (middle-truncated, the full value in a tooltip) with its buttons at the end of the row, and ends with one caption. **Monitoring** shows **Schedule**: the same sentence as the footer, the popover, and Settings → Refresh ("Checks every 15 minutes, and right after a network, route, proxy, DNS, VPN/TUN, wake, or app-activation change."). It also has Highlights, Providers, **Launch at login** with **Login Items…**, **Edit in Settings…**, and **Event Log…**. The **Event Log** window lists important events, one concise line each with a UTC time (for example `2026-10-18 13:28:56Z  Check · route changed · IPWHOIS.io`). It loads the last 500 from the runtime logs, then updates live, with **Copy All** and **Show Log Files**. Tailscale provider lines appear only when what Clash is served changes. It also shows a read-only summary of refresh frequency, change-highlight state, and provider rotation order: the next provider is marked, and each provider shows whether it is paused, skipped for a missing token, or out of daily budget, plus today's calls against its budget. An **Edit in Settings…** button opens Settings. While the [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon) is installed, a **Tailscale → Clash Verge provider** group shows what Clash is served (in plain words, for example **Reject · Tailscale isn't connected**), the last check, the provider file's location, its `127.0.0.1:18766` address, and a **Clash Verge** row: **Installed** with **Open**, or a note that nothing uses the provider until Clash Verge Rev is installed. Without Clash Verge Rev, **Apply in Clash Verge** says to install it first and hides **Open Clash Verge**. The footer (**Settings**, **Clear indicators**, **Quit Exit IP**, status line) stays visible at any window size. The **popover** is the compact view: flag, country, public IP, city/region, organization, last-updated time, and relative age. On both, data older than twice the selected refresh interval gets a **refresh is overdue** notice (the menu bar prefixes **Stale ·**). During a confirmed change, both surfaces provide the same yellow notice with **Dismiss** and **Turn Off Highlights** actions. |
+| **Installation diagnostics** | Checksum and strict signature verification, timestamped installer and daemon logs, main-thread launch readiness with PID/path/build validation, bounded command execution, and local app-specific security logs and process samples. Normal Gatekeeper approval is retained. |
 | **Settings window** | Opened from the **gear** button in the menu-bar popover or the **Settings** button in the dashboard; a retained AppKit window (like the dashboard) so it reliably comes to the front, at about 560 × 700 on the screen with the pointer (smaller screens get a window that fits). Sections: **Menu bar** display style, **Change attention** highlights, **Startup** (Launch at login + Open Login Items Settings), **Refresh** frequency, **IP location service** (provider pool, per-provider health and a **Test** action that checks exactly that provider—skipped, not redirected, while it is paused or out of daily budget, IPinfo Lite token in Keychain; without a token IPinfo Lite is skipped and its health line says so), and **Diagnostics** (clear indicators, redacted logs with configurable retention). Debug builds also expose in-memory failure simulations for manual QA. |
 | **Exit-IP allowlist warning** | The dashboard holds exact IPv4/IPv6 addresses you expect to exit from (empty list = no warnings). When a fresh, successful lookup returns an address outside the list, an **Exit IP Not Allowed** warning window opens once per address, and the popover and dashboard show an orange **Exit IP not on the allowlist** notice. The app **only warns**: it never blocks or changes networking, and the menu bar keeps showing the country. Failed lookups never warn. See [allowlist details](#exit-ip-allowlist-warning). |
 | **Tailscale → Clash Verge provider (root daemon)** | For Clash Verge Rev (Mihomo) next to the native Tailscale client: keeps one proxy-provider member, `TS-NATIVE`, bound to the current, verified Tailscale `utunN` and serves it at `http://127.0.0.1:18766/provider.yaml`, so a reconnect that renumbers the tunnel needs no profile reload. **Homebrew installs and starts it on every Mac** (cask postflight, one password prompt), Sleepless-style; `sudo /bin/bash …/daemon.sh install` does the same by hand. Install stops whatever else holds the port (a launchd job is disabled so it stays off). A Mac without Tailscale or Clash Verge Rev gets it too: install prints which app is missing, the provider serves Reject with a [plain-language reason](#reasons) (**Reject · Tailscale isn't installed**), and the dashboard's **Clash Verge** row says when nothing uses the provider. A **removal grant** in `/etc/sudoers.d/` lets `brew uninstall` remove the daemon without a password; it allows only unloading the two jobs, restarting the monitor, and deleting the daemon's files and the grant. `daemon.sh remove` turns the daemon off and leaves a marker in your Library so Homebrew reinstalls keep it off. A root monitor checks the route to `100.100.100.100`, the Tailscale CLI's address (run as the console user), and interface ownership every 2 seconds and writes `provider.yaml`. A launchd-held loopback socket serves that file as `nobody`, Reject whenever Tailscale can't be verified or the last check is more than 12 seconds old. The dashboard shows its status in plain words, the file's location (**Open File**, **Show in Finder**), the address it is served at (**Open in Browser**), and whether Clash Verge Rev is installed (**Open**). The dashboard's **Clash Verge profile** group takes your proxy (server, port, username, password; kept in the Keychain). The app writes a complete Clash Verge profile with it, including the provider, to `~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml` (0600; never committed or logged; no installer writes it). It shows the file's location (**Open File**, **Show in Finder**) and how to import it into Clash Verge as its one Local profile. See [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon). |
 | **Refresh engine** | Checks immediately on launch; offers an opt-in **Launch at login** setting (in the dashboard's Monitoring group and Settings → Startup); refreshes after any network-environment change (gateway/default route, routing table including TUN split routes, interface or address, proxy, DNS, VPN/tunnel), system wake, screen wake, session activation, and app activation; supports explicit **Refresh now** buttons; uses a true 15-minute default cadence; persists the last successful result; and balances promptness against provider quotas with **immediate-then-wait** event handling (the first network/system event is checked at once; further events in the next 5 seconds become one trailing lookup on the next provider in the pool) and a layered [lookup budget](#lookup-budget-prompt-checks-vs-api-limits): a hard five-second gap per provider, a 6-lookup burst allowance refilling one every 2 minutes that throttles only follow-ups (a storm lasting over 30 seconds, retries) and routine triggers—**a real network change is never queued behind it**—freshness skipping for routine triggers, per-provider daily budgets at 80% of documented limits, and cooldowns after rate-limit/quota/auth refusals (a paused provider is skipped by normal rotation; the refused request is never retried elsewhere, and a pause never hides the last verified location). `NWPathMonitor` updates that report an unchanged path are ignored. A newly started lookup supersedes any queued one. |
-| **Release packaging (install on another Mac)** | Pushing a `v<version>` tag runs `.github/workflows/release.yml` on a clean GitHub `macos-26` runner. It runs `Scripts/package-release.sh`, which builds a **universal** (Apple silicon + Intel) Release app and ad-hoc signs it so the whole bundle is sealed. The release gets an **app zip**, an **Installer package** (`.pkg`), **`install.sh`**, and **`SHA256SUMS`**, plus a Sigstore **build attestation** and notes from `CHANGELOG.md`. Release files must carry **no extended attributes**: a developer Mac's `com.apple.provenance` stamps would stall the launch on every other Mac. So the zip is made without them, and CI fails if any file has them. Ad-hoc builds run the app **unsandboxed**, the way every linker-signed build already ran, because an ad-hoc signature can't authorize the App Group. The widget extension stays sandboxed and can't read the app's data. The default generator build is signed the same way. Users install with the **Homebrew cask** `brew install --cask jxz345/tap/exit-ip-monitor` (tap [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap), same approach as Sleepless). It keeps Homebrew's normal quarantine and prints an explicit, app-only recovery for the macOS 27 launch stall. Like Sleepless's cask, its postflight runs the bundled `daemon.sh install` with `sudo` (unless the daemon was turned off), and its uninstall step removes the daemon through the removal grant with `sudo -n`, so it never asks for a password; `zap` also deletes the grant. Without Homebrew, double-click the `.pkg` (one **Open Anyway** approval); it quits a running copy and launches the new one. Or use `install.sh`, which installs from the `.pkg` without Installer or Gatekeeper. Neither installs the daemon; run `daemon.sh install` from the app bundle for it. See [Install](#install) and [Publishing a release](#publishing-a-release). |
+| **Release packaging (install on another Mac)** | Pushing a `v<version>` tag runs `.github/workflows/release.yml` on a clean GitHub `macos-26` runner. It runs `Scripts/package-release.sh`, which builds a **universal** (Apple silicon + Intel) Release app and ad-hoc signs it so the whole bundle is sealed. The release gets an **app zip**, an **Installer package** (`.pkg`), **`install.sh`**, and **`SHA256SUMS`**, plus a Sigstore **build attestation** and notes from `CHANGELOG.md`. Release archives omit extended attributes, and CI rejects AppleDouble entries. This checks archive hygiene; it does not prove Gatekeeper approval or app readiness. Ad-hoc builds run the app **unsandboxed**, the way every linker-signed build already ran, because an ad-hoc signature can't authorize the App Group. The widget extension stays sandboxed and can't read the app's data. The default generator build is signed the same way. Users install with the **Homebrew cask** `brew install --cask jxz345/tap/exit-ip-monitor` (tap [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap), same approach as Sleepless). It keeps Homebrew's normal quarantine and prints an explicit, app-only recovery for the macOS 27 launch stall. Like Sleepless's cask, its postflight runs the bundled `daemon.sh install` with `sudo` (unless the daemon was turned off), and its uninstall step removes the daemon through the removal grant with `sudo -n`, so it never asks for a password; `zap` also deletes the grant. Without Homebrew, double-click the `.pkg` (one **Open Anyway** approval); it quits a running copy and launches the new one. Or use `install.sh`, which verifies and extracts the `.pkg`, then checks app readiness without changing security settings. Neither installs the daemon; run `daemon.sh install` from the app bundle for it. See [Install](#install) and [Publishing a release](#publishing-a-release). |
 | **Privacy and resilience** | The selected provider sees the public IP address. Provider credentials are kept in the macOS Keychain; the widget receives only the non-secret snapshot through the App Group. |
 
 ## Exit-IP allowlist warning
@@ -650,14 +685,14 @@ open "$PWD/XcodeProject/DerivedData/Build/Products/Debug/ExitIPMonitor.app"
 
 ### Publishing a release
 
-Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml) on a clean GitHub `macos-26` runner, never on a developer Mac. A process macOS tracks, such as an agent session or an app launched from one, stamps every file it writes with that Mac's `com.apple.provenance`. Those stamps travel inside the zip and the package. On every other Mac they stall the app's launch, and the quarantine recovery can't remove them. Sleepless's releases are built the same way.
+Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml) on a clean GitHub `macos-26` runner, never on a developer Mac. Clean CI builds make the artifact origin reproducible, as in Sleepless. Archives are checked for AppleDouble metadata. macOS can add provenance locally during approval; its presence on an installed copy does not establish corruption or identify the cause of a launch stall.
 
 To publish version `<version>`:
 
 1. Add a `## [<version>]` section to [`CHANGELOG.md`](CHANGELOG.md); it becomes the release notes. The app's version is `MARKETING_VERSION` in `Scripts/generate-xcode-project.sh`.
 2. Commit, then push the tag: `git tag v<version> && git push origin v<version>`. To rebuild an existing tag, run the workflow from the Actions tab with that tag.
 3. The workflow builds and checks the release, then publishes it:
-   - it runs `Scripts/package-release.sh`, failing if any file carries extended attributes or the app's version doesn't match the tag;
+   - it runs `Scripts/package-release.sh`, failing if an archive contains AppleDouble metadata or the app's version does not match the tag;
    - it signs a Sigstore build attestation for the zip and package;
    - it publishes the release, with the notes plus verification commands.
 4. Copy `version` and `sha256` from the run's summary into [the cask](https://github.com/jxz345/homebrew-tap/blob/main/Casks/exit-ip-monitor.rb), run `brew style` and `brew audit --cask --online`, and push the tap. Every build has a new checksum, so the cask needs updating even when the same version is rebuilt.
@@ -671,7 +706,7 @@ Anyone can verify a download with `shasum -a 256 -c SHA256SUMS` and `gh attestat
 - `install.sh`, which is `Scripts/install-release.sh` with the repository, version, and package SHA-256 filled in. The repository comes from the `origin` remote, or from `EXIT_IP_RELEASE_REPO=owner/repo`;
 - `SHA256SUMS`.
 
-Locally, the script warns when the zip or package carries extended attributes. The package payload always does on a stamped Mac, because staged files are re-stamped. Don't publish those files.
+Locally, the script warns when the ZIP or package carries AppleDouble metadata. Publish CI-built artifacts and test the downloaded release through normal Gatekeeper approval; a local build alone does not validate that path.
 
 Only Developer ID signing plus notarization, which needs a paid developer team, removes the Gatekeeper approval described in [First launch](#first-launch).
 
@@ -687,7 +722,10 @@ The running app writes JSON-lines diagnostics to `~/Library/Application Support/
 
 | Event | Meaning |
 | --- | --- |
-| `monitor_started` / `monitor_stopped` | App launch and quit. |
+| `process_entered` / `app_initialized` / `application_did_finish_launching` | Startup milestones with PID, launch ID, version and build. |
+| `startup_profile_begin` / `startup_services_ready` | Boundaries around profile and service initialization; no credentials are logged. |
+| `dashboard_presented` / `app_ready` / `app_terminating` | Dashboard shown, main queue responding, and shutdown. `launch_heartbeat_failed` records a diagnostic write failure. |
+| `monitor_started` / `monitor_stopped` | IP monitor start and stop. |
 | `tailscale_provider_changed` | What the Tailscale → Clash Verge responder serves changed (`served` direct/reject, `interface`, `reason`). Recorded only on a change; the daemon's 2-second rewrites never add a record. The first reading after launch is recorded once. |
 | `clash_profile_written` | The app wrote `~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml` (`path` only; the proxy is never logged), at launch or on **Save Profile**. `clash_profile_write_failed` (`error`) reports a problem. |
 | `provider_health_changed` | Provider attempt/success/failure history is persisted for the Settings health panel. |
@@ -838,8 +876,9 @@ Changing a gateway, route, interface, system proxy, or enabling/disabling a TUN/
 
 | Check | Expected result |
 | --- | --- |
-| Install on another Mac | The release workflow run for the tag succeeds. The published zip has no AppleDouble entries (`zipinfo -1 ExitIPMonitor-<version>.zip \| grep -c '\._'` prints `0`), and neither does the package payload (`pkgutil --payload-files`). `shasum -a 256 -c SHA256SUMS` and `gh attestation verify` pass. On a second Mac (Intel or Apple silicon), `brew install --cask jxz345/tap/exit-ip-monitor` installs a strictly verifying app. Its binary has no `com.apple.provenance` from another Mac, and the cask prints the recovery caveats. After **Open Anyway**, or after the app-only recovery when the launch stalls at `_dyld_start`, the dashboard opens with a successful lookup and the runtime log shows `monitor_started`. `brew uninstall` quits and removes the app. The `.pkg` (after **Open Anyway**) and `install.sh` give the same result. |
+| Install on another Mac | The release workflow run for the tag succeeds. The published zip has no AppleDouble entries (`zipinfo -1 ExitIPMonitor-<version>.zip \| grep -c '\._'` prints `0`), and neither does the package payload (`pkgutil --payload-files`). `shasum -a 256 -c SHA256SUMS` and `gh attestation verify` pass. On a second Mac (Intel or Apple silicon), `brew install --cask jxz345/tap/exit-ip-monitor` installs a strictly verifying app. After normal **Open Anyway** approval and authentication, the dashboard opens with a successful lookup and the launch checker reports the installed build ready. Recovery using quarantine removal is tested separately and does not count as passing normal approval. `brew uninstall` quits and removes the app. The `.pkg` (after **Open Anyway**) and `install.sh` give the same result. |
 | First launch and reopen | On a Mac that has never run the app, the first launch opens the dashboard. Quit and relaunch: only the menu-bar item appears. Open the app again from Finder while it runs: the dashboard comes forward. |
+| Launch failure diagnostics | A blocked process without `app_ready`, an old build, an old heartbeat, or another bundle cannot produce success. A failure exits within its deadline and saves app-specific evidence. `bash Tests/ExitIPInstallTests/run.sh` passes. |
 | First launch | Menu label changes from `Locating` to the selected country display after an immediate check. Dashboard shows public IP, provider data, absolute **Last updated** time, and relative age. |
 | Menu settings | Switching among name, country code, flag, and flag+name immediately changes the menu-bar item; a stale result is labeled after twice the selected interval. |
 | Open Settings | The gear button in the popover and the **Settings** button in the dashboard both open or bring forward the **Exit IP Settings** window, at full size with every section visible (never a bare title bar). The Dock icon disappears only after both the dashboard and settings windows are closed. Launching the app opens no settings window on its own. |

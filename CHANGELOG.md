@@ -14,8 +14,7 @@ The first release: a menu-bar app showing your public exit IP address and countr
 dashboard, settings, an exit-IP allowlist warning, an event log, a WidgetKit widget, and a macOS 26
 Control Center control. It also runs the Tailscale → Clash Verge provider and maintains the Clash
 Verge profile that uses it. It requires macOS 14 or later (the Control Center control needs
-macOS 26) and is universal: Apple silicon and Intel. This build is 1.0 (2); it replaced the first
-1.0 build.
+macOS 26) and is universal: Apple silicon and Intel. This build is 1.0 (3); it replaces the previous 1.0 assets.
 
 ### Install
 
@@ -54,6 +53,15 @@ Studio Code) under **Privacy & Security → App Management**, then retry.
 Without Homebrew, double-click `ExitIPMonitor-1.0.pkg` (approve it once with **Open
 Anyway**), or run
 `curl -fsSL https://github.com/jxz345/exit-ip-widget/releases/latest/download/install.sh | bash`.
+
+### Installation diagnostics
+
+- Installers require a fresh main-thread readiness response from the installed build; a PID
+  blocked before startup no longer reports success.
+- Added startup milestones, local launch diagnostics, step durations and exit statuses,
+  and time limits for launch, daemon setup, and diagnostic commands.
+- Normal Gatekeeper approval is retained. Provenance metadata alone is no longer described
+  as proof of a foreign or damaged release.
 
 ### Added
 

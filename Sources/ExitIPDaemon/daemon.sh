@@ -37,8 +37,13 @@ TAILSCALE_APP="/Applications/Tailscale.app"
 TAILSCALE_CLI="$TAILSCALE_APP/Contents/MacOS/Tailscale"
 CLASH_VERGE_APP="/Applications/Clash Verge.app"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/command-support.sh" ]; then
+    source "$SCRIPT_DIR/command-support.sh"
+else
+    source "$SCRIPT_DIR/../ExitIPDiagnostics/command-support.sh"
+fi
 
-run() { "$@"; }
+run() { bounded_command 20 "${1##*/} ${2:-}" "$@"; }
 
 # Succeeds when something accepts connections on 127.0.0.1:PORT. connect() rather than bind():
 # on macOS a SO_REUSEADDR bind to 127.0.0.1 succeeds over another process's wildcard listener.
@@ -62,16 +67,29 @@ port_accepts() {
 # with "5: Input/output error", so wait until `launchctl print` no longer finds it.
 BOOTOUT_TICKS=100   # 0.2 s each
 bootout_target() {
-    local target=$1 ticks=0
-    run /bin/launchctl bootout "$target" >/dev/null 2>&1 || true
-    while run /bin/launchctl print "$target" >/dev/null 2>&1; do
-        if [ "$ticks" -ge "$BOOTOUT_TICKS" ]; then
+    local target=$1 ticks=0 started=$SECONDS status=0
+    step_log BEGIN "Unload $target"
+    run /bin/launchctl bootout "$target" >/dev/null 2>&1 || status=$?
+    if [ "$status" = 124 ]; then
+        step_log ERROR "Timed out unloading $target"
+        return 1
+    fi
+    while true; do
+        status=0
+        run /bin/launchctl print "$target" >/dev/null 2>&1 || status=$?
+        if [ "$status" = 124 ]; then
+            step_log ERROR "Timed out inspecting $target"
+            return 1
+        fi
+        [ "$status" = 0 ] || break
+        if [ "$ticks" -ge "$BOOTOUT_TICKS" ] || [ "$((SECONDS - started))" -ge 20 ]; then
             echo "error: launchd did not unload $target within 20 seconds." >&2
             return 1
         fi
         /bin/sleep 0.2
         ticks=$((ticks + 1))
     done
+    step_log END "Unloaded $target"
 }
 
 bootout_wait() { bootout_target "system/$1"; }
@@ -292,12 +310,15 @@ copy_files() {
 
 install_main() {
     local started user
+    step_log BEGIN "Install Tailscale → Clash Verge services"
     [ -f "$SCRIPT_DIR/tailscale-verge.sh" ] || { echo "error: tailscale-verge.sh is missing next to daemon.sh." >&2; return 1; }
     user=$(target_user) || user=""
     preflight_report
     bootout_wait "$HTTP_LABEL" || return 1
     bootout_wait "$LABEL" || return 1
+    step_log BEGIN "Copy root-owned service files"
     copy_files || return 1
+    step_log END "Service files copied"
     started=$(/bin/date +%s)
     install_plist monitor_plist "$PLIST" "$LABEL" || { echo "error: could not load $LABEL." >&2; return 1; }
     echo "Monitor installed and running ($LABEL)."
@@ -321,6 +342,7 @@ install_main() {
     fi
     install_plist http_plist "$HTTP_PLIST" "$HTTP_LABEL" || { echo "error: could not load $HTTP_LABEL." >&2; return 1; }
     echo "Responder installed ($HTTP_LABEL): http://127.0.0.1:$PORT/provider.yaml"
+    step_log END "Service installation complete"
 }
 
 remove_main() {
@@ -368,7 +390,16 @@ daemon_main() {
     case "${1:-}" in
         install|remove)
             [ "$(/usr/bin/id -u)" -eq 0 ] || { echo "error: run as root (sudo /bin/bash daemon.sh $1)." >&2; return 1; }
+            local log_dir=/Library/Logs/ExitIPMonitor log_file status
+            [ ! -L "$log_dir" ] || { echo "error: log directory is a symlink." >&2; return 1; }
+            /usr/bin/install -d -m 0755 -o root -g wheel "$log_dir" || return 1
+            log_file=$(new_step_log "$log_dir" "daemon-$1") || return 1
+            exec > >(/usr/bin/tee -a "$log_file") 2>&1
+            step_log INFO "Daemon action=$1 uid=$(/usr/bin/id -u); log: $log_file"
             "$1_main"
+            status=$?
+            step_log END "Daemon action=$1 status=$status elapsed=${SECONDS}s; log: $log_file"
+            return "$status"
             ;;
         status) status_main ;;
         *) echo "usage: daemon.sh install | remove | status" >&2; return 2 ;;

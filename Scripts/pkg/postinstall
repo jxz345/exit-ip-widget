@@ -1,19 +1,21 @@
-#!/bin/sh
+#!/bin/bash
 # Installer package postinstall: launch the installed app for the logged-in user. Its dashboard
 # opens on first launch. Installer passes the install destination (e.g. /Applications) as $2.
 # Never fails the installation.
 app="$2/ExitIPMonitor.app"
 [ -d "$app" ] || app="${3%/}/Applications/ExitIPMonitor.app"
 [ -d "$app" ] || exit 0
-xattr -dr com.apple.quarantine "$app" 2>/dev/null
+source "$app/Contents/Resources/command-support.sh"
+step_log INFO "Package installed: $app. Requesting launch; macOS approval may be required."
 
 if [ "$(id -u)" -eq 0 ]; then
     user="$(stat -f %Su /dev/console)"
     case "$user" in
         ""|root|loginwindow) exit 0 ;;
     esac
-    launchctl asuser "$(id -u "$user")" sudo -u "$user" open "$app" 2>/dev/null
+    bounded_command 15 launch /bin/launchctl asuser "$(id -u "$user")" /usr/bin/sudo -n -u "$user" /usr/bin/open "$app"
 else
-    open "$app" 2>/dev/null
+    bounded_command 15 launch /usr/bin/open "$app"
 fi
+step_log INFO "Check readiness: /bin/bash '$app/Contents/Resources/diagnose-launch.sh' --app '$app'"
 exit 0

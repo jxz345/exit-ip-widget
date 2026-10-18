@@ -1,8 +1,8 @@
 name: Release
 
 # Builds a release from a tag on a clean GitHub-hosted runner. Release files must not be built on
-# a developer Mac: files written there can carry that Mac's com.apple.provenance stamp, which
-# stalls the app's launch on every other Mac (README → Publishing a release). Signing the build
+# a developer Mac. Archive metadata checks do not replace a real first-launch test.
+# Signing the build
 # provenance with Sigstore (SLSA Build L2) and publishing checksums lets anyone verify a download
 # came from this exact source, with no Apple account involved.
 
@@ -47,6 +47,11 @@ jobs:
 
       - name: Daemon script tests
         run: bash Tests/ExitIPDaemonTests/run.sh
+
+      - name: Shared and installation tests
+        run: |
+          xcrun swift test
+          bash Tests/ExitIPInstallTests/run.sh
 
       - name: Build the zip, package, install.sh, and SHA256SUMS
         env:
