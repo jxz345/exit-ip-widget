@@ -23,6 +23,7 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
             defaults.set(true, forKey: ExitIPPreferenceKey.firstLaunchDashboardShown)
             Self.showDashboard()
         }
+        SingleInstanceController.didFinishLaunching()
         // Schedule after the launch callback so readiness proves the main queue is servicing work.
         DispatchQueue.main.async { LaunchDiagnostics.markReady() }
     }

@@ -18,6 +18,8 @@ public enum EventLogLine {
         switch event {
         case "monitor_started": return "App started"
         case "monitor_stopped": return "App quit"
+        case "duplicate_launch_reopened": return "Existing app reopened · duplicate launch prevented"
+        case "single_instance_lock_failed": return "App startup blocked · couldn't acquire the instance lock"
         case "refresh_requested":
             return "Check · \(trigger(fields["trigger"])) · \(provider)"
         case "refresh_skipped":

@@ -15,6 +15,12 @@ open /Applications/ExitIPMonitor.app
 
 It is a menu-bar app. The dashboard opens on the first launch, and again whenever you open the app while it is running. The country flag stays in the menu bar. The cask lives in [jxz345/homebrew-tap](https://github.com/jxz345/homebrew-tap). It installs `ExitIPMonitor-<version>.zip` from this repository's [releases](https://github.com/jxz345/exit-ip-widget/releases) after checking its SHA-256.
 
+Only one copy runs at a time. Normal reopening shows the existing dashboard. A second copy
+started directly, including a development build, exits before starting monitoring and asks
+the existing app to reopen. A kernel-held instance lock prevents simultaneous startup races
+and is released automatically when the owner exits or crashes. Launch Services also rejects
+forced multiple instances through `LSMultipleInstancesProhibited` ([Apple documentation](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/LaunchServicesKeys.html#//apple_ref/doc/uid/20001431-113253)).
+
 Homebrew then asks for your password once, to install and start the [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon) daemon from the app bundle, the way Sleepless installs its service. It prints whether Tailscale and Clash Verge Rev are installed:
 
 ```text
@@ -163,6 +169,7 @@ The implementation follows Apple’s Liquid Glass guidance for macOS 26+ without
 | Surface | Behavior |
 | --- | --- |
 | **Menu bar** | Defaults to the compact **color flag**. Settings offers **country name**, **country code**, **color flag**, or **flag + country name**. It shows no IP or provider information in the resting state. |
+| **Single instance** | Normal reopening shows the existing dashboard. Duplicate executable launches exit before startup and request that the existing app reopen. An atomic process-lifetime lock covers concurrent starts and releases on exit or crash; Launch Services also prohibits multiple instances. A running older release is respected during development. |
 | **Change attention** | A country change is first confirmed by a **different documented API**. Only then does it trigger a change dot, bold label, accessible announcement, and a visible yellow **menu-bar popover, dashboard, and widget** banner for **10 minutes**. macOS renders menu-bar extra labels as monochrome template content, so the menu-bar dot and capsule appear in the system menu-bar color rather than yellow; the yellow treatment is visible in the popover, dashboard, and widget. The person can dismiss the current alert or permanently turn off future highlights in the popover, dashboard, or Settings. Changing IP while keeping the same country does not trigger the alert. |
 | **Error state** | A failed lookup shows a clear error and hides country name/flag across the menu bar, dashboard, widget, and Control Center, showing a **stop icon** (`xmark.octagon.fill`) where the flag would be: the menu bar shows the icon (with "Exit IP error" for the text styles), the popover and dashboard header show it in red, and the widget and Control Center use it too. Control Center keeps the triangle only for a confirmed country change. **Clear error** removes the message but keeps location hidden until a successful lookup restores it. Provider country codes are validated or resolved from a known country name before a snapshot is stored. |
 | **Desktop / Notification Center widget** | Small: flag, country code/name, age. **Medium (recommended for quick inspection):** country, IP, city/region when supplied, organization, relative update time, stale marker, and country-change banner — all without opening the app. |
@@ -776,11 +783,12 @@ bash Scripts/check-signed-build.sh
 
 The default generator build uses no signing identity (it is ad-hoc signed afterwards, with the app unsandboxed), so it is useful as a **local compilation and menu-bar-app test**. You can keep a local copy in `~/Applications` through Finder or by copying the complete `.app` bundle; do not copy only the inner `Contents/MacOS/ExitIPMonitor` executable because it depends on the bundle’s `Info.plist`, embedded widget extension, and resources.
 
-The running app writes JSON-lines diagnostics to `~/Library/Application Support/ExitIPMonitor/Logs` (one `runtime-<launch time>.jsonl` file per launch). Set `EXIT_IP_LOG_DIRECTORY` before launching to write runtime logs somewhere else during development. Useful events when checking behavior against this README:
+The running app writes JSON-lines diagnostics to `~/Library/Application Support/ExitIPMonitor/Logs` (one `runtime-<launch time>-<pid>.jsonl` file per launch, so simultaneous launch attempts do not overwrite each other's logs). Set `EXIT_IP_LOG_DIRECTORY` before launching to write runtime logs somewhere else during development; it does not change the instance lock. Useful events when checking behavior against this README:
 
 | Event | Meaning |
 | --- | --- |
 | `process_entered` / `app_initialized` / `application_did_finish_launching` | Startup milestones with PID, launch ID, version and build. |
+| `duplicate_instance_blocked` / `duplicate_launch_reopened` / `single_instance_lock_failed` | A second process exited before app startup, the existing app received its reopen request, or a filesystem error prevented safe single-instance startup. |
 | `startup_profile_begin` / `startup_services_ready` | Boundaries around profile and service initialization; no credentials are logged. |
 | `dashboard_presented` / `app_ready` / `app_terminating` | Dashboard shown, main queue responding, and shutdown. `launch_heartbeat_failed` records a diagnostic write failure. |
 | `monitor_started` / `monitor_stopped` | IP monitor start and stop. |
@@ -955,6 +963,7 @@ Changing a gateway, route, interface, system proxy, or enabling/disabling a TUN/
 | Widget | Reads the last successful snapshot without making a new request. Material data/alert changes reload it immediately; timestamp-only checks use the hourly timeline instead of consuming an on-demand reload. |
 | Control Center (macOS 26+) | Resized tile exposes country code, public exit IP, last-update time, and warning symbol for a confirmed change; dashboard remains optional. Tapping the tile opens the **Exit IP Dashboard** window. |
 | Quit command | The menu-bar popover provides **Quit Exit IP**. Selecting it terminates the process and stops timers, path monitoring, workspace observers, and SystemConfiguration observation. |
+| Single instance | Reopen normally, force `open -n`, and launch the bundled executable while the app is already running: only one monitor stays alive, and normal reopening shows the dashboard. Launch two executables concurrently with no app running: only one reaches `app_ready`. Quit or terminate it, then relaunch: the leftover lock file must not block startup. Copies from a development build must not run alongside the installed app. |
 | Rate limit | A `429`, `401`/`402`/`403`, or quota error body pauses that provider until the persisted `Retry-After` deadline, or one hour when that header is absent. The menu bar keeps the last verified country (never `Exit IP error`) and the popover shows `<provider> paused until …`. The refused request is not retried elsewhere, but the next network change or **Refresh now** runs at once on another provider (`provider_rotated_cooldown`). With every provider paused, `lookup_all_providers_paused` appears and lookups resume at the earliest deadline. |
 | Routine freshness | Within 2 minutes of a lookup, activate the app (open the dashboard). The log shows `refresh_skipped` with `reason=fresh` and no lookup. |
 | Network change with no burst tokens | Make more than six network changes over a minute or two, each a few seconds apart (e.g. toggle a proxy or VPN repeatedly). Every change still starts a lookup at once or within its 5-second window; no `refresh_queued` with `reason=burst_budget` and `urgency=network_change` appears. `bash Scripts/check-refresh-log.sh` prints **PASS**. |

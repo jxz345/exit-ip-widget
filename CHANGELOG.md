@@ -57,6 +57,14 @@ Anyway**), or run
 - README records the verified launch solution and explains why the old dashboard hid the
   Clash Verge controls after an incomplete daemon reinstall.
 
+### Single instance
+
+- A process-lifetime lock prevents duplicate app processes, including concurrent executable
+  launches and development copies. Duplicate attempts reopen the existing app and exit
+  before monitoring starts; a crash automatically releases the lock.
+- Launch Services also prohibits multiple instances. Runtime log filenames include the PID
+  so simultaneous launch attempts cannot overwrite each other's diagnostics.
+
 ### Installation diagnostics
 
 - Installers require a fresh main-thread readiness response from the installed build; a PID

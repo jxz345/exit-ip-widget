@@ -16,5 +16,7 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSUIElement</key>
     <true/>
+    <key>LSMultipleInstancesProhibited</key>
+    <true/>
 </dict>
 </plist>

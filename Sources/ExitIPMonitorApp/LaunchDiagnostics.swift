@@ -69,6 +69,7 @@ enum LaunchDiagnostics {
 enum ExitIPEntryPoint {
     @MainActor
     static func main() {
+        guard SingleInstanceController.acquire() else { return }
         LaunchDiagnostics.record("process_entered")
         ExitIPMonitorApp.main()
     }

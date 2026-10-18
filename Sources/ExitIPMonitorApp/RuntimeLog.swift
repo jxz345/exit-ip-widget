@@ -10,7 +10,7 @@ final class RuntimeLog: @unchecked Sendable {
 
     private let lock = NSLock()
     private let fileURL: URL?
-    /// The folder holding every launch's `runtime-*.jsonl`.
+    /// The folder holding every launch's `runtime-*.jsonl` (time plus PID avoids launch collisions).
     let directory: URL
 
     private init() {
@@ -29,7 +29,7 @@ final class RuntimeLog: @unchecked Sendable {
             Self.cleanupOldLogs(in: directory, retentionDays: DiagnosticPreferencesStore().load().retentionDays)
             let stamp = ISO8601DateFormatter().string(from: .now)
                 .replacingOccurrences(of: ":", with: "-")
-            let url = directory.appendingPathComponent("runtime-\(stamp).jsonl")
+            let url = directory.appendingPathComponent("runtime-\(stamp)-\(ProcessInfo.processInfo.processIdentifier).jsonl")
             fileManager.createFile(atPath: url.path, contents: nil)
             fileURL = url
         } catch {
