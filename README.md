@@ -33,6 +33,10 @@ Load, Save, or Remove credentials; startup and automatic refresh do not read Key
 Existing installations retain cached uninstall hooks; follow
 [Clean uninstall and reinstall](#clean-uninstall-and-reinstall) when migrating them.
 
+Build 8 passed a real Homebrew install and reinstall, including termination of an actual hung
+app process. On the affected Mac, launch still stalls before application entry after normal
+macOS approval. See [installation history](#installation-history-and-remaining-launch-failure).
+
 | Task | Command |
 | --- | --- |
 | Update | `brew upgrade --cask jxz345/tap/exit-ip-monitor` |
@@ -218,6 +222,27 @@ skipped in favor of testing build 8 directly through the published Homebrew tap.
 removes automatic Keychain access; that change does not establish a fix for the separate
 macOS pre-entry approval stall. Normal installed-app launch and reinstall are separate
 acceptance checks.
+
+The replacement **v1.0 / build 8** was published locally without GitHub Actions on
+**2026-10-19** and installed from the GitHub release through the published Homebrew cask.
+All 17 installed bundle files matched the validated app, both architectures passed strict
+signature verification, and quarantine remained intact. No provider service, provider files,
+or removal grant were installed.
+
+The first launch and a normal launch after the user completed approval both reported
+`blocked_before_entry`: a 96 KB process at `_dyld_start`, with no application readiness.
+At the time of the password dialog, `syspolicyd` recorded **Allow Override**, **Getting auth
+to allow override**, and **Waiting for user override authentication**. This is macOS
+Gatekeeper approval authentication. App-only installation does not guarantee a password-free
+macOS approval; the app's own administrator operation remains behind **Install Provider**.
+The trace also recorded LocalAuthentication endpoint errors, without proving their cause.
+
+A real `brew reinstall` then exercised the hung process: Homebrew's normal Quit failed,
+the embedded cleanup helper terminated the verified process with TERM, verified provider
+absence, and allowed installation to finish. The reinstalled bundle again matched all 17
+files and retained quarantine; existing profile and preference file hashes were unchanged.
+The app was left installed and stopped with no provider. Homebrew lifecycle acceptance passed;
+live launch, dashboard, and monitoring acceptance remain blocked by the pre-entry stall.
 
 The implementation follows Sleepless's ad-hoc signing, normal macOS approval, and Homebrew
 service implementation. Provider setup is now explicitly deferred to the dashboard. The launch diagnostics replace the old `pgrep` success check

@@ -24,8 +24,11 @@ Existing Homebrew users must follow the README clean-uninstall migration for old
 hooks, clear the cached ZIP, and reinstall. `brew upgrade` cannot detect this same-version
 replacement. Installation requests no provider setup and startup accesses no Keychain.
 The app is not notarized: macOS may separately require **Open Anyway** and authentication.
-Normal launch and reinstall must be verified; the earlier macOS pre-entry approval stall
-is not claimed fixed. See README launch diagnostics.
+A real Homebrew install and reinstall passed, including termination of an actual hung app
+after normal Quit failed. The app and user-file checks passed and no provider was installed.
+Normal launch still stalled before application entry after approval on the affected Mac.
+The password prompt coincided with macOS Gatekeeper override authentication, not an app
+startup operation. See README launch diagnostics; this release does not fix that stall.
 
 ### Explicit Keychain access — build 1.0 (8)
 
