@@ -126,16 +126,11 @@ final class EventLogWindowController: NSObject, NSWindowDelegate {
         model.start()
         let window = window ?? makeWindow()
         self.window = window
-        NSApp.setActivationPolicy(.regular)
         NSApp.activate()
-        if !window.isVisible { placeOnActiveScreen(window) }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        keepWindowOnScreen(window)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        guard let window else { return }
-        ExitIPAppDelegate.restoreAccessoryModeIfNoWindowsVisible(closing: window)
     }
 
     private func makeWindow() -> NSWindow {
@@ -154,6 +149,7 @@ final class EventLogWindowController: NSObject, NSWindowDelegate {
         window.contentMinSize = NSSize(width: 520, height: 240)
         window.isReleasedWhenClosed = false
         window.delegate = self
+        placeOnActiveScreen(window)
         return window
     }
 }

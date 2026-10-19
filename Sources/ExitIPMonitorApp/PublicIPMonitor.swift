@@ -764,7 +764,7 @@ final class PublicIPMonitor: ObservableObject {
     }
 
     /// Warn-only allowlist: an address outside a non-empty list opens the warning window once per address
-    /// and shows a notice in the popover and dashboard. It never blocks traffic, never sets the error
+    /// and shows a notice in the dashboard. It never blocks traffic, never sets the error
     /// indicator, and never hides the location. Only fresh, successful lookups reach this.
     private func evaluateAuthorization(for address: String?) {
         guard let address, !allowedIPList.isEmpty, !allowedIPList.contains(address) else {

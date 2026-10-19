@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// A main-thread heartbeat lets an external installer distinguish a usable app from a process
 /// suspended by macOS before main(), or an app blocked during startup. It contains no user data.
@@ -52,7 +52,15 @@ enum LaunchDiagnostics {
             "stage": stage,
             "bundle_path": Bundle.main.bundleURL.resolvingSymlinksInPath().path,
             "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
-            "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+            "build": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown",
+            "dashboard_open": DashboardWindowController.shared.isOpen,
+            "dashboard_visible": DashboardWindowController.shared.window?.isVisible == true,
+            "dashboard_minimized": DashboardWindowController.shared.window?.isMiniaturized == true,
+            "dashboard_key": DashboardWindowController.shared.window?.isKeyWindow == true,
+            "dashboard_on_active_space": DashboardWindowController.shared.window?.isOnActiveSpace == true,
+            "app_active": NSApp?.isActive == true,
+            "dock_visible": NSApp?.activationPolicy() == .regular,
+            "status_item_visible": (NSApp?.delegate as? ExitIPAppDelegate)?.statusItemIsVisible == true
         ]
         do {
             let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
@@ -71,6 +79,11 @@ enum ExitIPEntryPoint {
     static func main() {
         guard SingleInstanceController.acquire() else { return }
         LaunchDiagnostics.record("process_entered")
-        ExitIPMonitorApp.main()
+        let application = NSApplication.shared
+        let delegate = ExitIPAppDelegate()
+        application.delegate = delegate
+        application.setActivationPolicy(.accessory)
+        LaunchDiagnostics.record("app_initialized")
+        withExtendedLifetime(delegate) { application.run() }
     }
 }

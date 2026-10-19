@@ -37,7 +37,7 @@ struct MenuBarCountryLabel: View {
         .accessibilityLabel(accessibilityText(at: date))
     }
 
-    private func accessibilityText(at date: Date) -> String {
+    func accessibilityText(at date: Date) -> String {
         if indicators.suppressLocation { return "Exit IP error" }
         guard let snapshot else { return "Exit IP location unavailable" }
         let stale = snapshot.isStale(at: date, threshold: Double(refreshInterval.rawValue * 2))
@@ -55,126 +55,6 @@ struct MenuBarCountryLabel: View {
     }
 }
 
-struct StatusPopoverView: View {
-    @ObservedObject var monitor: PublicIPMonitor
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if case .notAllowed(let address) = monitor.authorizationState {
-                AllowlistNotice(address: address)
-            }
-            SnapshotHeader(snapshot: monitor.snapshot, indicators: monitor.indicators)
-            StaleDataNotice(
-                snapshot: monitor.indicators.suppressLocation ? nil : monitor.snapshot,
-                refreshInterval: monitor.preferences.refreshInterval,
-                date: monitor.displayDate
-            )
-            Divider()
-            SnapshotDetails(snapshot: monitor.indicators.suppressLocation ? nil : monitor.snapshot)
-            Text(MonitoringRules.summary(interval: monitor.preferences.refreshInterval))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if let errorMessage = monitor.indicators.errorMessage {
-                IndicatorErrorView(message: errorMessage, clear: monitor.clearError)
-            }
-
-            if !monitor.indicators.suppressLocation,
-               let snapshot = monitor.snapshot,
-               let change = snapshot.countryChange,
-               change.isHighlighted() {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(
-                        "Country changed from \(change.previousName) to \(snapshot.countryName)",
-                        systemImage: "mappin.and.ellipse"
-                    )
-                    .font(.footnote.weight(.semibold))
-
-                    HStack {
-                        Button("Dismiss") { monitor.dismissCountryChangeHighlight() }
-                            .buttonStyle(.borderless)
-                        Button("Turn Off Highlights") { monitor.setCountryChangeHighlightsEnabled(false) }
-                            .buttonStyle(.borderless)
-                    }
-                    .font(.footnote)
-                }
-                .padding(10)
-                .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 10))
-            }
-
-            if case .failed(let message) = monitor.status {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-            }
-            if case .awaitingConfirmation(let message) = monitor.status {
-                Label(message, systemImage: "checkmark.shield")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            if case .coolingDown(let retryNotBefore) = monitor.status {
-                Label(
-                    "All providers paused until \(retryNotBefore.formatted(date: .omitted, time: .shortened))",
-                    systemImage: "clock.badge.exclamationmark"
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            }
-            if case .providerPaused(let provider, let retryNotBefore) = monitor.status {
-                Label(
-                    "\(provider.displayName) paused until \(retryNotBefore.formatted(date: .omitted, time: .shortened)); using the next provider",
-                    systemImage: "clock.badge.exclamationmark"
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            }
-            if case .waitingForMinimumInterval(let nextAllowed) = monitor.status {
-                Label(
-                    "Refresh queued for \(nextAllowed.formatted(date: .omitted, time: .standard))",
-                    systemImage: "clock.arrow.circlepath"
-                )
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Button {
-                    ExitIPAppDelegate.showSettings()
-                } label: {
-                    Image(systemName: "gear")
-                }
-                .help("Settings")
-                .accessibilityLabel("Settings")
-                Button("Open Dashboard") {
-                    ExitIPAppDelegate.showDashboard()
-                }
-                Spacer()
-                Button {
-                    Task { await monitor.refresh(force: true) }
-                } label: {
-                    Label("Refresh now", systemImage: "arrow.clockwise")
-                }
-                .disabled(monitor.status == .refreshing)
-            }
-
-            Button("Clear indicators") { monitor.clearIndicators() }
-                .buttonStyle(.borderless)
-                .disabled(monitor.indicators.errorMessage == nil && monitor.snapshot?.countryChange == nil)
-
-            Divider()
-
-            Button(role: .destructive) {
-                NSApp.terminate(nil)
-            } label: {
-                Label("Quit Exit IP", systemImage: "power")
-            }
-        }
-        .padding()
-        .frame(width: 360)
-    }
-}
-
 struct DashboardView: View {
     @ObservedObject var monitor: PublicIPMonitor
     @StateObject private var daemon = DaemonInstallationModel()
@@ -183,36 +63,32 @@ struct DashboardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Everything fits at the default size; scrolling only matters in a small window, and
-            // the footer (Settings, status) stays visible either way.
-            ScrollView {
-                content
-                    .padding(20)
+            GeometryReader { geometry in
+                ScrollView {
+                    content(twoColumns: geometry.size.width >= 960)
+                        .padding(20)
+                }
             }
             Divider()
             footer
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
         }
+        .controlSize(.regular)
+        .buttonStyle(DashboardButtonStyle())
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 16) {
+    private func content(twoColumns: Bool) -> some View {
+        // AnyLayout preserves the form's identity and unsaved edits when the window is resized.
+        let columns = twoColumns
+            ? AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+        return VStack(alignment: .leading, spacing: 16) {
             notices
             header
-            // Two columns when the window is wide enough (the default), stacked otherwise.
-            // ViewThatFits compares ideal widths, so each column states one (2 × 440 + 16).
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 16) {
-                    leftColumn
-                        .frame(minWidth: 420, idealWidth: 440, maxWidth: .infinity, alignment: .topLeading)
-                    rightColumn
-                        .frame(minWidth: 420, idealWidth: 440, maxWidth: .infinity, alignment: .topLeading)
-                }
-                VStack(alignment: .leading, spacing: 16) {
-                    leftColumn
-                    rightColumn
-                }
+            columns {
+                leftColumn.frame(maxWidth: .infinity, alignment: .topLeading)
+                rightColumn.frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -228,14 +104,14 @@ struct DashboardView: View {
         }
         if let snapshot = monitor.snapshot, !monitor.indicators.suppressLocation,
            let change = snapshot.countryChange, change.isHighlighted() {
-            HStack {
-                Image(systemName: "mappin.and.ellipse")
-                Text("Country changed from \(change.previousName) to \(snapshot.countryName)")
-                Spacer()
-                Button("Dismiss") { monitor.dismissCountryChangeHighlight() }
-                    .buttonStyle(.borderless)
-                Button("Turn Off Highlights") { monitor.setCountryChangeHighlightsEnabled(false) }
-                    .buttonStyle(.borderless)
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Country changed from \(change.previousName) to \(snapshot.countryName)", systemImage: "mappin.and.ellipse")
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("Dismiss") { monitor.dismissCountryChangeHighlight() }
+                    Button("Turn Off Highlights") { monitor.setCountryChangeHighlightsEnabled(false) }
+                }
+                .buttonStyle(DashboardButtonStyle(minimumWidth: 140))
             }
             .padding(10)
             .background(.yellow.opacity(0.18), in: RoundedRectangle(cornerRadius: 10))
@@ -243,21 +119,37 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 16) {
+                headerSummary
+                Spacer(minLength: 16)
+                refreshButton
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                headerSummary
+                refreshButton
+            }
+        }
+    }
+
+    private var headerSummary: some View {
+        VStack(alignment: .leading, spacing: 6) {
             SnapshotHeader(snapshot: monitor.snapshot, indicators: monitor.indicators)
             StaleDataNotice(
                 snapshot: monitor.indicators.suppressLocation ? nil : monitor.snapshot,
                 refreshInterval: monitor.preferences.refreshInterval,
                 date: monitor.displayDate
             )
-            Spacer()
-            Button {
-                Task { await monitor.refresh(force: true) }
-            } label: {
-                Label("Refresh now", systemImage: "arrow.clockwise")
-            }
-            .disabled(monitor.status == .refreshing)
         }
+    }
+
+    private var refreshButton: some View {
+        Button {
+            Task { await monitor.refresh(force: true) }
+        } label: {
+            Label("Refresh now", systemImage: "arrow.clockwise")
+        }
+        .disabled(monitor.status == .refreshing)
     }
 
     /// The exit IP, allowlist, and saved profile remain available during daemon setup.
@@ -275,13 +167,9 @@ struct DashboardView: View {
                         DetailRow(label: "Timezone", value: snapshot.timezone ?? "Not supplied")
                         GridRow {
                             DetailLabel(text: "Updated")
-                            HStack(spacing: 4) {
-                                Text(lastUpdatedText(snapshot.checkedAt))
-                                    .textSelection(.enabled)
-                                Text("·")
-                                Text(snapshot.checkedAt, style: .relative)
-                                Text("ago")
-                            }
+                            Text("\(lastUpdatedText(snapshot.checkedAt)) · \(snapshot.checkedAt, style: .relative) ago")
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         DetailRow(label: "Source", value: snapshot.provider.displayName)
                     }
@@ -298,12 +186,16 @@ struct DashboardView: View {
             DashboardGroup("Allowed exit IPs") {
                 ForEach(monitor.allowedIPList.addresses, id: \.self) { address in
                     HStack {
-                        Text(address).font(.body.monospaced())
+                        Text(address).font(.body.monospaced()).textSelection(.enabled)
                         Spacer()
                         Button(role: .destructive) { monitor.removeAllowedIP(address) } label: {
                             Image(systemName: "minus.circle")
                         }
                         .buttonStyle(.borderless)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                        .help("Remove allowed IP")
+                        .accessibilityLabel("Remove allowed IP \(address)")
                     }
                 }
                 HStack {
@@ -357,7 +249,6 @@ struct DashboardView: View {
                     Label("Settings", systemImage: "gear")
                 }
                 Button("Clear indicators") { monitor.clearIndicators() }
-                    .buttonStyle(.borderless)
                     .disabled(monitor.indicators.errorMessage == nil && monitor.snapshot?.countryChange == nil)
                 Spacer()
                 Button(role: .destructive) {
@@ -387,7 +278,7 @@ struct DashboardView: View {
     }
 }
 
-/// Shown in the popover and dashboard while the verified exit IP is outside the allowlist. Warn-only.
+/// Shown in the dashboard while the verified exit IP is outside the allowlist. Warn-only.
 private struct AllowlistNotice: View {
     let address: String
 
@@ -459,43 +350,35 @@ private struct IndicatorErrorView: View {
         HStack(alignment: .top, spacing: 8) {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Button("Clear error", action: clear)
-                .buttonStyle(.borderless)
         }
         .font(.footnote)
         .padding(10)
         .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }
 
-private struct SnapshotDetails: View {
-    let snapshot: ExitIPSnapshot?
+/// Native macOS controls with one size and minimum label width across the dashboard.
+private struct DashboardButtonStyle: PrimitiveButtonStyle {
+    var minimumWidth: CGFloat = 120
+    var prominent = false
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let location = snapshot?.locationSummary, !location.isEmpty {
-                Text(location)
-                    .font(.callout)
-            } else {
-                Text("Location detail unavailable")
-                    .font(.callout)
-            }
-            if let organization = snapshot?.organization {
-                Text(organization)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            if let checkedAt = snapshot?.checkedAt {
-                Text("Last updated \(checkedAt.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text(checkedAt.formatted(.relative(presentation: .named)))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+    func makeBody(configuration: Configuration) -> some View {
+        let button = Button(role: configuration.role, action: configuration.trigger) {
+            configuration.label
+                .font(.body)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: minimumWidth, minHeight: 18)
         }
+        Group {
+            if prominent { button.buttonStyle(.borderedProminent) }
+            else { button.buttonStyle(.bordered) }
+        }
+        .controlSize(.regular)
     }
 }
 
@@ -577,9 +460,9 @@ private struct PathRow<Actions: View>: View {
     }
 
     var body: some View {
-        GridRow {
+        GridRow(alignment: .top) {
             DetailLabel(text: label)
-            HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(value)
                     .font(.callout.monospaced())
                     .lineLimit(1)
@@ -587,8 +470,7 @@ private struct PathRow<Actions: View>: View {
                     .textSelection(.enabled)
                     .help(value)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                actions
-                    .controlSize(.small)
+                HStack(spacing: 8) { actions }
             }
         }
     }
@@ -721,7 +603,7 @@ private struct MonitoringSummary: View {
             Button("Edit in Settings…") { ExitIPAppDelegate.showSettings() }
             Button("Event Log…") { ExitIPAppDelegate.showEventLog() }
         }
-        .controlSize(.small)
+        .buttonStyle(DashboardButtonStyle(minimumWidth: 120))
     }
 
     private func providerState(_ provider: ProviderID) -> String {
@@ -752,16 +634,14 @@ private struct TailscaleVergeProviderSection: View {
                 DetailGrid {
                     GridRow {
                         DetailLabel(text: "Status")
-                        HStack(spacing: 4) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Label(status.summary, systemImage: status.isDirect ? "checkmark.circle" : "xmark.octagon")
                                 .foregroundStyle(status.isDirect ? Color.primary : Color.orange)
+                                .fixedSize(horizontal: false, vertical: true)
                             if let checkedAt = status.checkedAt {
-                                Group {
-                                    Text("·")
-                                    Text(checkedAt, style: .relative)
-                                    Text("ago")
-                                }
-                                .foregroundStyle(.secondary)
+                                Text("Checked \(checkedAt.formatted(.relative(presentation: .named)))")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -782,7 +662,6 @@ private struct TailscaleVergeProviderSection: View {
                                 Text("Installed")
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 Button("Open") { ClashVergeApp.open(vergeURL) }
-                                    .controlSize(.small)
                             }
                         } else {
                             Text(ClashVergeApp.missingNote)
@@ -810,7 +689,7 @@ private struct TailscaleVergeProviderSection: View {
                 Button(installer.hasError ? "Retry Installation" : "Install Provider") {
                     installer.install()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(DashboardButtonStyle(prominent: true))
                 .help("macOS will ask for administrator authentication to install the background services.")
             }
             if let message = installer.message {
@@ -834,7 +713,6 @@ private struct TailscaleVergeProviderSection: View {
                 Button("Show Installation Log") {
                     NSWorkspace.shared.activateFileViewerSelecting([logURL])
                 }
-                .controlSize(.small)
             }
         }
         .task {
@@ -865,45 +743,46 @@ private struct ClashVergeProfileSection: View {
     var body: some View {
         DashboardGroup("Clash Verge profile") {
             if !providerInstalled {
-                GroupCaption("You can save your profile now. Install the background provider on the right before using Tailscale routing.")
+                GroupCaption("You can save your profile now. Install the background provider before using Tailscale routing.")
             }
             DetailGrid {
                 GridRow {
                     DetailLabel(text: "Name")
-                    HStack(spacing: 8) {
-                        TextField("e.g. MP-SG", text: $name)
-                        Text("Type").foregroundStyle(.secondary).frame(width: 66, alignment: .leading)
-                        Picker("Type", selection: $type) {
-                            ForEach(ClashProxySettings.ProxyType.allCases) { Text($0.displayName).tag($0) }
-                        }
-                        .labelsHidden()
-                        .frame(width: 110)
+                    TextField("e.g. MP-SG", text: $name).accessibilityLabel("Proxy name")
+                }
+                GridRow {
+                    DetailLabel(text: "Type")
+                    Picker("Proxy type", selection: $type) {
+                        ForEach(ClashProxySettings.ProxyType.allCases) { Text($0.displayName).tag($0) }
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 GridRow {
                     DetailLabel(text: "Server")
-                    HStack(spacing: 8) {
-                        TextField("IP address or host name", text: $server)
-                        Text("Port").foregroundStyle(.secondary).frame(width: 66, alignment: .leading)
-                        TextField("1080", text: $port).frame(width: 110)
-                    }
+                    TextField("IP address or host name", text: $server).accessibilityLabel("Proxy server")
+                }
+                GridRow {
+                    DetailLabel(text: "Port")
+                    TextField("1080", text: $port).accessibilityLabel("Proxy port")
                 }
                 GridRow {
                     DetailLabel(text: "Username")
-                    HStack(spacing: 8) {
-                        TextField("optional", text: $username)
-                        Text("Password").foregroundStyle(.secondary).frame(width: 66, alignment: .leading)
-                        SecureField("optional", text: $password).frame(width: 110)
-                    }
+                    TextField("optional", text: $username).accessibilityLabel("Proxy username")
+                }
+                GridRow {
+                    DetailLabel(text: "Password")
+                    SecureField("optional", text: $password).accessibilityLabel("Proxy password")
                 }
                 GridRow {
                     DetailLabel(text: "")
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack {
+                        HStack(spacing: 8) {
                             Button("Save Profile") { save() }
                             Button("Remove", role: .destructive) { remove() }
                                 .disabled(!fileExists && name.isEmpty && server.isEmpty)
                         }
+                        .buttonStyle(DashboardButtonStyle(minimumWidth: 120))
                         if let message {
                             Text(message)
                                 .font(.footnote)
@@ -1016,25 +895,21 @@ private struct ClashVergeApplySteps: View {
     var body: some View {
         DashboardGroup("Apply in Clash Verge") {
             if !providerInstalled {
-                Label("Install the background provider above before applying the profile.", systemImage: "exclamationmark.triangle")
+                Label("Install the background provider before applying the profile.", systemImage: "exclamationmark.triangle")
                     .font(.footnote)
                     .foregroundStyle(.orange)
             }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 5) {
-                step(1, "Save Profile (left) writes the profile file.")
+                step(1, "Save Profile writes the profile file.")
                 step(2, "Clash Verge → Profiles → New. In Create Profile, set Type to Local, Choose File → clash-verge-profile.yaml, then Save.")
                 step(3, "Right-click the new profile → Select. Clash Verge reloads once.")
                 step(4, "Proxies → Proxy Provider → tailscale-live lists TS-NATIVE, and Status above reads Direct.")
             }
-            HStack(alignment: .firstTextBaseline) {
-                if let vergeURL = ClashVergeApp.url {
-                    GroupCaption("Import again after changing the proxy. Tailscale reconnects need nothing.")
-                    Spacer()
-                    Button("Open Clash Verge") { ClashVergeApp.open(vergeURL) }
-                        .controlSize(.small)
-                } else {
-                    GroupCaption("Install Clash Verge Rev first, then follow steps 2–4. Import again after changing the proxy.")
-                }
+            if let vergeURL = ClashVergeApp.url {
+                Button("Open Clash Verge") { ClashVergeApp.open(vergeURL) }
+                GroupCaption("Import again after changing the proxy. Tailscale reconnects need nothing.")
+            } else {
+                GroupCaption("Install Clash Verge Rev first, then follow steps 2–4. Import again after changing the proxy.")
             }
         }
     }
@@ -1246,7 +1121,7 @@ struct SettingsView: View {
     }
 
     /// Always the monitor's live preferences. Rotation changes the active provider after every lookup and
-    /// the popover can turn highlights off, so a copy held by this retained window would go stale and
+    /// the dashboard can turn highlights off, so a copy held by this retained window would go stale and
     /// write old values back (reverting rotation and spending a `provider_changed` lookup).
     private var preferences: MonitoringPreferences { monitor.preferences }
 

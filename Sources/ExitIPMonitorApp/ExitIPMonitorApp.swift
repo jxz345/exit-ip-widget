@@ -4,9 +4,14 @@ import SwiftUI
 @MainActor
 final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
     static let monitor = PublicIPMonitor()
+    private var statusItem: StatusItemController?
+
+    var statusItemIsVisible: Bool { statusItem?.isVisible == true }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LaunchDiagnostics.record("application_did_finish_launching")
+        installApplicationMenus()
+        statusItem = StatusItemController(monitor: Self.monitor)
         Self.monitor.start()
         LaunchDiagnostics.record("startup_profile_begin")
         do {
@@ -44,6 +49,8 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
         Self.monitor.stop()
     }
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
     static func showDashboard() {
         DashboardWindowController.shared.show(monitor: monitor)
     }
@@ -56,15 +63,51 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
         EventLogWindowController.shared.show()
     }
 
-    /// The dashboard and settings windows each make the app `.regular` while open; only return
-    /// to accessory mode once neither is still on screen.
-    static func restoreAccessoryModeIfNoWindowsVisible(closing: NSWindow) {
-        let stillVisible = [DashboardWindowController.shared.window, SettingsWindowController.shared.window,
-                            EventLogWindowController.shared.window]
-            .contains { $0 != nil && $0 !== closing && $0!.isVisible }
-        if !stillVisible {
-            NSApp.setActivationPolicy(.accessory)
+    /// Minimizing is not closing. Only the dashboard owns the app's Dock presence.
+    static func updateActivationPolicy() {
+        NSApp.setActivationPolicy(DashboardWindowController.shared.isOpen ? .regular : .accessory)
+    }
+
+    @objc private func openDashboard(_ sender: Any?) { Self.showDashboard() }
+    @objc private func openSettings(_ sender: Any?) { Self.showSettings() }
+    @objc private func openEventLog(_ sender: Any?) { Self.showEventLog() }
+
+    private func installApplicationMenus() {
+        let main = NSMenu()
+        func submenu(_ title: String) -> NSMenu {
+            let item = main.addItem(withTitle: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: title)
+            item.submenu = menu
+            return menu
         }
+        let app = submenu("Exit IP Monitor")
+        app.addItem(withTitle: "About Exit IP Monitor", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        app.addItem(.separator())
+        app.addItem(withTitle: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ",").target = self
+        app.addItem(.separator())
+        app.addItem(withTitle: "Hide Exit IP Monitor", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = app.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        app.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        app.addItem(.separator())
+        app.addItem(withTitle: "Quit Exit IP Monitor", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        submenu("File").addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        let edit = submenu("Edit")
+        for (title, action, key) in [("Undo", "undo:", "z"), ("Redo", "redo:", "Z"),
+                                     ("Cut", "cut:", "x"), ("Copy", "copy:", "c"),
+                                     ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
+            edit.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
+        }
+        let windows = submenu("Window")
+        windows.addItem(withTitle: "Dashboard", action: #selector(openDashboard(_:)), keyEquivalent: "1").target = self
+        windows.addItem(withTitle: "Event Log", action: #selector(openEventLog(_:)), keyEquivalent: "").target = self
+        windows.addItem(.separator())
+        windows.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windows.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windows.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+        NSApp.mainMenu = main
+        NSApp.windowsMenu = windows
     }
 }
 
@@ -79,16 +122,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show(monitor: PublicIPMonitor) {
         let window = window ?? makeWindow(monitor: monitor)
         self.window = window
-        NSApp.setActivationPolicy(.regular)
         NSApp.activate()
-        placeOnActiveScreen(window)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        keepWindowOnScreen(window)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        guard let window else { return }
-        ExitIPAppDelegate.restoreAccessoryModeIfNoWindowsVisible(closing: window)
     }
 
     private func makeWindow(monitor: PublicIPMonitor) -> NSWindow {
@@ -105,6 +143,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.contentMinSize = NSSize(width: 520, height: 420)
         window.isReleasedWhenClosed = false
         window.delegate = self
+        placeOnActiveScreen(window)
         return window
     }
 }
@@ -114,30 +153,51 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
     static let shared = DashboardWindowController()
 
     private(set) var window: NSWindow?
+    private(set) var isOpen = false
+    private var screenObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                if let window = self?.window { keepWindowOnScreen(window) }
+            }
+        }
+    }
 
     func show(monitor: PublicIPMonitor) {
         let window = window ?? makeWindow(monitor: monitor)
         self.window = window
 
-        // The MenuBarExtra panel never makes this LSUIElement app active, and macOS 14+
-        // refuses activation requests from an inactive accessory app. Becoming a regular
-        // app while the dashboard is open lets activation succeed (and gives the window a
-        // Dock icon and Cmd-Tab entry); `windowWillClose` restores accessory mode.
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate()
-        placeOnActiveScreen(window)
+        isOpen = true
+        ExitIPAppDelegate.updateActivationPolicy()
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        keepWindowOnScreen(window)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
+        NSApp.activate()
+        // Dock/activation changes finish asynchronously. Request focus again after that turn,
+        // when the normal window is already ordered on the active Space.
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard self?.isOpen == true, let window else { return }
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            LaunchDiagnostics.record("dashboard_front_requested")
+        }
         LaunchDiagnostics.record("dashboard_presented")
     }
 
     func windowWillClose(_ notification: Notification) {
-        guard let window else { return }
-        ExitIPAppDelegate.restoreAccessoryModeIfNoWindowsVisible(closing: window)
+        isOpen = false
+        ExitIPAppDelegate.updateActivationPolicy()
+        LaunchDiagnostics.record("dashboard_closed")
     }
 
     private func makeWindow(monitor: PublicIPMonitor) -> NSWindow {
-        // Opens wide enough for two columns, so nothing needs scrolling.
+        // Content scrolls when needed, while the footer remains available.
         let hostingController = fixedSizeHostingController(
             DashboardView(monitor: monitor)
                 .frame(minWidth: 520, minHeight: 380)
@@ -154,7 +214,14 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         window.setContentSize(NSSize(width: 1000, height: 860))
         window.contentMinSize = NSSize(width: 520, height: 380)
         window.isReleasedWhenClosed = false
+        window.level = .normal
+        window.hidesOnDeactivate = false
+        window.collectionBehavior = [.managed, .primary, .participatesInCycle, .fullScreenPrimary, .moveToActiveSpace]
+        window.tabbingMode = .disallowed
         window.delegate = self
+        let restored = window.setFrameUsingName("ExitIPDashboard")
+        window.setFrameAutosaveName("ExitIPDashboard")
+        if restored { keepWindowOnScreen(window) } else { placeOnActiveScreen(window) }
         return window
     }
 }
@@ -211,33 +278,22 @@ func placeOnActiveScreen(_ window: NSWindow) {
                            width: size.width, height: size.height), display: false)
 }
 
+/// Keep a remembered frame when possible; recover it when a display is removed or resized.
 @MainActor
-struct ExitIPMonitorApp: App {
-    @NSApplicationDelegateAdaptor(ExitIPAppDelegate.self) private var appDelegate
-    @StateObject private var monitor = ExitIPAppDelegate.monitor
-
-    // Settings live in `SettingsWindowController`, not a SwiftUI `Settings` scene: that scene
-    // opened its own window at every launch and couldn't be foregrounded from the popover.
-    init() {
-        LaunchDiagnostics.record("app_initialized")
-        let sharedMonitor = ExitIPAppDelegate.monitor
-        _monitor = StateObject(wrappedValue: sharedMonitor)
-        sharedMonitor.start()
+func keepWindowOnScreen(_ window: NSWindow) {
+    guard !window.styleMask.contains(.fullScreen) else { return }
+    let frame = window.frame
+    let screens = NSScreen.screens.map(\.visibleFrame)
+    guard let visible = screens.max(by: {
+        let a = $0.intersection(frame), b = $1.intersection(frame)
+        return (a.isNull ? 0 : a.width * a.height) < (b.isNull ? 0 : b.width * b.height)
+    }), visible.intersects(frame) else {
+        placeOnActiveScreen(window)
+        return
     }
-
-    var body: some Scene {
-        MenuBarExtra {
-            StatusPopoverView(monitor: monitor)
-        } label: {
-            MenuBarCountryLabel(
-                snapshot: monitor.snapshot,
-                displayStyle: monitor.preferences.menuBarDisplayStyle,
-                refreshInterval: monitor.preferences.refreshInterval,
-                indicators: monitor.indicators,
-                date: monitor.displayDate
-            )
-            .task { monitor.start() }
-        }
-        .menuBarExtraStyle(.window)
-    }
+    let size = NSSize(width: min(frame.width, visible.width), height: min(frame.height, visible.height))
+    let origin = NSPoint(x: min(max(frame.minX, visible.minX), visible.maxX - size.width),
+                         y: min(max(frame.minY, visible.minY), visible.maxY - size.height))
+    let fitted = NSRect(origin: origin, size: size)
+    if fitted != frame { window.setFrame(fitted, display: true) }
 }

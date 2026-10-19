@@ -14,7 +14,7 @@ The first release: a menu-bar app showing your public exit IP address and countr
 dashboard, settings, an exit-IP allowlist warning, an event log, a WidgetKit widget, and a macOS 26
 Control Center control. It also runs the Tailscale → Clash Verge provider and maintains the Clash
 Verge profile that uses it. It requires macOS 14 or later (the Control Center control needs
-macOS 26) and is universal: Apple silicon and Intel. This build is 1.0 (4); it replaces the previous 1.0 assets.
+macOS 26) and is universal: Apple silicon and Intel. This build is 1.0 (5); it replaces the previous 1.0 assets.
 
 ### Install
 
@@ -35,7 +35,7 @@ approve the first launch in **System Settings → Privacy & Security → Open An
 dashboard opens on first launch, and the country flag is in the menu bar.
 
 Build 3 resolved the observed pre-startup stall through a fresh verified release and normal
-macOS approval, with quarantine retained. Build 4 preserves that behavior. After approval,
+macOS approval, with quarantine retained. Builds 4 and 5 preserve that behavior. After approval,
 verify readiness with:
 
 ```sh
@@ -45,6 +45,18 @@ verify readiness with:
 Without Homebrew, double-click `ExitIPMonitor-1.0.pkg` (approve it once with **Open
 Anyway**), or run
 `curl -fsSL https://github.com/jxz345/exit-ip-widget/releases/latest/download/install.sh | bash`.
+
+### Dashboard window and controls
+
+- The persistent menu-bar flag opens the regular dashboard window directly, replacing the
+  compact popup. The window participates in Mission Control, App Exposé, window cycling,
+  and full screen; it remembers its frame and restores from minimization.
+- The Dock icon appears while the dashboard is open or minimized and disappears when it
+  closes, even with Settings/Event Log open. Monitoring and the status item continue.
+- Native dashboard buttons share regular sizing and aligned action groups; profile fields
+  have full-width rows. File actions, long notices, and provider status have room to wrap.
+- Resizing between one and two columns preserves unsaved profile edits. Standard app menus
+  support Settings, Close, Minimize, editing commands, and Quit.
 
 ### Dashboard provider installation
 
@@ -119,21 +131,19 @@ Anyway**), or run
 
 - One description of when the app checks: "Checks every 15 minutes, and right after a network, route,
   proxy, DNS, VPN/TUN, wake, or app-activation change." The dashboard's Monitoring **Schedule**
-  row, the dashboard footer, the menu-bar popover, and Settings → Refresh all show it.
-- A failed exit-IP lookup shows a **stop icon** in place of the flag on the menu bar, popover,
+  row, the dashboard footer, Settings → Refresh all show it.
+- A failed exit-IP lookup shows a **stop icon** in place of the flag on the menu bar,
   dashboard, widget, and Control Center.
-- Tidier dashboard: one label column per side, single-line paths with their buttons at the end of
-  the row, one caption per group, shorter labels, and numbered steps with a hanging indent.
-- The dashboard opens at about 1000 × 780 in two columns, so every group is visible without
-  scrolling: the current exit IP and allowlist on the left, Monitoring and the Tailscale provider
+- Tidier dashboard: one label column per side, single-line paths with aligned actions beneath, one caption per group, shorter labels, and numbered steps with a hanging indent.
+- The dashboard opens at about 1000 × 860 in two columns, with scrolling when needed: the current exit IP and allowlist on the left, Monitoring and the Tailscale provider
   on the right. A narrow window stacks them. **Last updated** and **Age** share one row, and
   **Launch at login** sits on one row with a **Login Items…** button.
 
 ### Fixed
 
-- Earlier builds of this release carried the build Mac's `com.apple.provenance` stamps on every
-  file, so the launch stalled on other Macs even after quarantine removal. Releases are now
-  built on a clean GitHub runner and carry no extended attributes.
+- Build 2 stalled before app startup on the affected Mac. A fresh verified release and normal
+  macOS approval resolved the observed failure with quarantine retained; the precise macOS
+  authentication failure remains unproven. Provenance metadata alone does not diagnose it.
 - Copies of earlier builds were reported as "damaged": their signature didn't cover the whole
   app. The app is now fully ad-hoc signed and universal.
 - The Settings window opened as a bare title bar. It now opens at full size (about 560 × 700),
