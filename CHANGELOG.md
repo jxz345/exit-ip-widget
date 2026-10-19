@@ -57,6 +57,8 @@ Anyway**), or run
   have full-width rows. File actions, long notices, and provider status have room to wrap.
 - Resizing between one and two columns preserves unsaved profile edits. Standard app menus
   support Settings, Close, Minimize, editing commands, and Quit.
+- Release checks now time stalled HTTP clients directly. The provider also closes incomplete
+  requests without a response on macOS Bash 3.2, whose timeout exit code differs from newer Bash.
 
 ### Dashboard provider installation
 

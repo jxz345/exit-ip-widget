@@ -75,10 +75,47 @@ for _ in $(seq 1 101); do flood+='X-Pad: 1\r\n'; done
 case "$(request "$flood\r\n")" in "HTTP/1.1 400 Bad request"$'\r\n'*) echo "PASS: more than 100 headers: 400" ;; *) echo "FAIL: header flood"; exit 1 ;; esac
 [ "$(request '')" = x ] || { echo "FAIL: an empty connection got a response"; exit 1; }
 echo "PASS: an empty connection closes without a response"
-start=$(date +%s)
-[ "$( (sleep 3; printf 'GET / HTTP/1.1\r\n') | /bin/bash "$SCRIPT" http | wc -c | tr -d ' ')" = 0 ] || { echo "FAIL: a stalled client got a response"; exit 1; }
-[ $(( $(date +%s) - start )) -le 3 ] || { echo "FAIL: a stalled client held the responder"; exit 1; }
-echo "PASS: a stalled client is dropped after the read timeout"
+# Keep the client's write end open, but wait only for the responder. Timing a pipeline with a
+# sleeping writer measures the writer's sleep instead; integer wall-clock seconds also round
+# that sleep up unpredictably. A monotonic deadline catches a missing read timeout without
+# requiring EOF or a late write (which would otherwise produce a misleading broken pipe).
+/usr/bin/python3 - "$SCRIPT" <<'PY'
+import subprocess
+import sys
+import time
+
+for name, prefix in (
+    ("request line", b""),
+    ("partial request line", b"GET /provider.yaml HTTP/1.1"),
+    ("headers", b"GET /provider.yaml HTTP/1.1\r\n"),
+):
+    started = time.monotonic()
+    with subprocess.Popen(
+        ["/bin/bash", sys.argv[1], "http"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) as responder:
+        try:
+            if prefix:
+                responder.stdin.write(prefix)
+                responder.stdin.flush()
+            responder.wait(timeout=3)
+            elapsed = time.monotonic() - started
+            output = responder.stdout.read()
+            assert responder.returncode == 0, "responder exited with %s" % responder.returncode
+            assert output == b"", "stalled client got a response: %r" % output
+            assert elapsed >= 0.75, "responder closed before its one-second read timeout"
+        except subprocess.TimeoutExpired:
+            raise SystemExit("FAIL: stalled %s held the responder beyond 3 seconds" % name)
+        finally:
+            if responder.poll() is None:
+                responder.kill()
+                responder.wait()
+    print("PASS: stalled %s dropped after %.3f seconds with the client still connected" % (name, elapsed))
+PY
+for incomplete in 'GET /provider.yaml HTTP/1.1' 'GET /provider.yaml HTTP/1.1\r\nHost: localhost'; do
+    [ "$(request "$incomplete")" = x ] || { echo "FAIL: incomplete request at EOF got a response"; exit 1; }
+done
+echo "PASS: incomplete requests at EOF close without a response"
 
 # Reject states and the freshness guard (provider.py ProviderState.snapshot).
 state reject "" no-tailscale-route 1999999998

@@ -316,14 +316,15 @@ http_main() {
     exec 2>/dev/null
     IFS= read -r -t "$READ_TIMEOUT" line
     status=$?
-    [ "$status" -le 128 ] || exit 0          # timed out: close without a response
-    [ "$status" -eq 0 ] || [ -n "$line" ] || exit 0
+    # macOS Bash 3.2 returns 1 for read timeout as well as EOF (newer Bash uses >128).
+    # Require complete lines so neither a timeout nor a disconnected client is served.
+    [ "$status" -eq 0 ] || exit 0
     line=${line%$'\r'}
     while :; do
         header=""
         IFS= read -r -t "$READ_TIMEOUT" header
         status=$?
-        [ "$status" -le 128 ] || exit 0
+        [ "$status" -eq 0 ] || exit 0
         header=${header%$'\r'}
         [ -n "$header" ] || break
         count=$((count + 1))
@@ -332,7 +333,6 @@ http_main() {
             send_error 400 "Bad request" "Bad request syntax or unsupported method"
             exit 0
         fi
-        [ "$status" -eq 0 ] || break
     done
     set -f
     # shellcheck disable=SC2086 # deliberate word splitting of the request line
