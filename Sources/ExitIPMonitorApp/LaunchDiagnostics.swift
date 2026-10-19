@@ -73,6 +73,7 @@ enum LaunchDiagnostics {
     }
 }
 
+#if !EXIT_IP_TEST_HOST
 @main
 enum ExitIPEntryPoint {
     @MainActor
@@ -87,3 +88,4 @@ enum ExitIPEntryPoint {
         withExtendedLifetime(delegate) { application.run() }
     }
 }
+#endif

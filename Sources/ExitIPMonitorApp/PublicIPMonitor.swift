@@ -81,6 +81,7 @@ final class PublicIPMonitor: ObservableObject {
         /// One provider refused requests and is paused until the date; rotation uses the others meanwhile.
         case providerPaused(ProviderID, Date)
         case waitingForMinimumInterval(Date)
+        case waitingForIPinfoToken
         case failed(String)
     }
 
@@ -139,9 +140,7 @@ final class PublicIPMonitor: ObservableObject {
     private var hasVerifiedAddressThisSession = false
     /// The address the allowlist warning window was last opened for, so it opens once per address.
     private var warningPresentedForAddress: String?
-    /// Whether an IPinfo Lite token is stored. Read lazily (`refreshIPinfoTokenState`) only when IPinfo
-    /// is enabled, so anonymous pools never touch the Keychain.
-    private var hasIPinfoToken: Bool?
+    let ipinfoCredentials: CredentialSession
     private var isStarted = false
     private var lifecycleGeneration = 0
 
@@ -155,6 +154,7 @@ final class PublicIPMonitor: ObservableObject {
         providerHealthStore: ProviderHealthStore = ProviderHealthStore(),
         diagnosticPreferencesStore: DiagnosticPreferencesStore = DiagnosticPreferencesStore(),
         client: any PublicIPLookupClientProtocol = PublicIPLookupClient(),
+        ipinfoCredentials: CredentialSession? = nil,
         now: @escaping @Sendable () -> Date = { Date.now }
     ) {
         self.snapshotStore = snapshotStore
@@ -166,6 +166,7 @@ final class PublicIPMonitor: ObservableObject {
         self.providerHealthStore = providerHealthStore
         self.diagnosticPreferencesStore = diagnosticPreferencesStore
         self.client = client
+        self.ipinfoCredentials = ipinfoCredentials ?? AppCredentials.makeSession(account: SecureTokenStore.ipinfoLiteAccount)
         self.now = now
         self.snapshot = snapshotStore.load()
         self.indicators = indicatorStore.load()
@@ -270,33 +271,61 @@ final class PublicIPMonitor: ObservableObject {
         setAllowedIPList(updated)
     }
 
+    func loadIPinfoToken() async -> Bool {
+        guard await ipinfoCredentials.load() else { return false }
+        ipinfoCredentialChanged(requestRefresh: true)
+        return true
+    }
+
     /// A saved token may resolve an authentication pause, so clear it and check with the new credential.
-    func ipinfoTokenSaved() {
+    func saveIPinfoToken(_ token: String) async -> Bool {
+        let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty, await ipinfoCredentials.save(token) else { return false }
         cooldownStore.clear(for: .ipinfoLite)
-        hasIPinfoToken = true
-        Task { await refresh(force: true, trigger: .settingsChanged) }
+        ipinfoCredentialChanged(requestRefresh: true)
+        return true
     }
 
     /// Without a token IPinfo Lite can only fail, so rotation skips it (like a pause) instead of
     /// producing a lookup error that would hide the location. The old credential's pause no longer
     /// applies. No lookup is spent: the current result is still valid.
-    func ipinfoTokenRemoved() {
+    func removeIPinfoToken() async -> Bool {
+        guard await ipinfoCredentials.remove() else { return false }
         cooldownStore.clear(for: .ipinfoLite)
-        hasIPinfoToken = false
         RuntimeLog.shared.info("ipinfo_token_removed")
-        if preferences.provider == .ipinfoLite {
-            _ = advanceProvider(after: .ipinfoLite)
+        ipinfoCredentialChanged(requestRefresh: false)
+        return true
+    }
+
+    private func ipinfoCredentialChanged(requestRefresh: Bool) {
+        objectWillChange.send()
+        if ipinfoToken == nil {
+            if preferences.provider == .ipinfoLite, advanceProvider(after: .ipinfoLite) == nil {
+                status = .waitingForIPinfoToken
+            }
+        } else if requestRefresh, isStarted, preferences.providerPool.contains(.ipinfoLite) {
+            Task { await refresh(force: true, trigger: .settingsChanged) }
         }
     }
 
-    /// True when IPinfo Lite is enabled but has no stored token, so rotation must skip it.
-    var isIPinfoMissingToken: Bool {
-        guard preferences.providerPool.contains(.ipinfoLite) || preferences.provider == .ipinfoLite else { return false }
-        if hasIPinfoToken == nil {
-            let token = try? SecureTokenStore.read(account: SecureTokenStore.ipinfoLiteAccount)
-            hasIPinfoToken = !(token ?? "").isEmpty
+    /// These are memory-only checks, including during view rendering and automatic refresh.
+    var ipinfoToken: String? {
+        guard let token = ipinfoCredentials.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else { return nil }
+        return token
+    }
+
+    var isIPinfoTokenUnavailable: Bool { ipinfoToken == nil }
+
+    var ipinfoCredentialStatus: String {
+        if ipinfoCredentials.isBusy { return "Waiting for Keychain…" }
+        if ipinfoToken != nil { return "Token available for this session" }
+        switch ipinfoCredentials.state {
+        case .notLoaded: return "Saved token not loaded"
+        case .loading: return "Waiting for Keychain…"
+        case .missing, .available: return "No saved token found"
+        case .failed: return "Keychain access failed; try Load again"
         }
-        return hasIPinfoToken == false
     }
 
     func applicationDidBecomeActive() {
@@ -331,8 +360,8 @@ final class PublicIPMonitor: ObservableObject {
     /// called (and rotation must not quietly test another one instead): honoring the pause is not optional.
     func testProvider(_ provider: ProviderID) async {
         guard preferences.providerPool.contains(provider) else { return }
-        if provider == .ipinfoLite, isIPinfoMissingToken {
-            RuntimeLog.shared.info("provider_test_skipped", fields: ["provider": provider.rawValue, "reason": "missing_token"])
+        if provider == .ipinfoLite, isIPinfoTokenUnavailable {
+            RuntimeLog.shared.info("provider_test_skipped", fields: ["provider": provider.rawValue, "reason": "token_unavailable"])
             return
         }
         let now = currentDate
@@ -427,6 +456,14 @@ final class PublicIPMonitor: ObservableObject {
         }
         var activeProvider = preferredProvider ?? preferences.provider
         let refreshGeneration = lifecycleGeneration
+        // No credential read, network request, quota charge, or missing-token error is needed.
+        // Keep the last verified snapshot visible until the user explicitly loads/saves a token.
+        if isIPinfoTokenUnavailable,
+           preferredProvider == .ipinfoLite || preferences.providerPool.allSatisfy({ $0 == .ipinfoLite }) {
+            status = .waitingForIPinfoToken
+            RuntimeLog.shared.info("refresh_skipped", fields: ["trigger": trigger.rawValue, "reason": "token_unavailable"])
+            return
+        }
         if !force, let snapshot,
            currentDate.timeIntervalSince(snapshot.checkedAt) < Double(preferences.refreshInterval.rawValue) {
             return
@@ -519,15 +556,7 @@ final class PublicIPMonitor: ObservableObject {
         }
 
         do {
-            // Avoid touching the Keychain for anonymous providers. On an unsigned development
-            // bundle, a Keychain query can wait for an access decision even though the selected
-            // provider does not use a token.
-            let token: String?
-            if activeProvider == .ipinfoLite {
-                token = try SecureTokenStore.read(account: SecureTokenStore.ipinfoLiteAccount)
-            } else {
-                token = nil
-            }
+            let token = activeProvider == .ipinfoLite ? ipinfoToken : nil
             var fetched = try await lookup(
                 configuration: LookupConfiguration(provider: activeProvider, ipinfoToken: token)
             )
@@ -860,11 +889,10 @@ final class PublicIPMonitor: ObservableObject {
     private func ineligibleProviders(keeping kept: ProviderID?) -> Set<ProviderID> {
         let budget = lookupBudgetStore.load(now: currentDate)
         let now = currentDate
-        let missingToken = isIPinfoMissingToken
+        let tokenUnavailable = isIPinfoTokenUnavailable
         return Set(preferences.providerPool.filter { candidate in
             if budget.isExhausted(candidate, now: now) { return true }
-            // A sole IPinfo provider still runs, so its "Add an API token" error stays visible.
-            if candidate == .ipinfoLite, missingToken, preferences.providerPool.count > 1 { return true }
+            if candidate == .ipinfoLite, tokenUnavailable { return true }
             if let retryNotBefore = cooldownStore.retryNotBefore(for: candidate), retryNotBefore > now { return true }
             if candidate == kept { return false }
             return temporarilyFailedProviders.contains(candidate)

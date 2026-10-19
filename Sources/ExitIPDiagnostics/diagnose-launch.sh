@@ -13,6 +13,7 @@ json_value() { /usr/bin/plutil -extract "$2" raw -o - "$1" 2>/dev/null; }
 # Verify the identity, freshness, and liveness of the record. Functions are injectable in tests.
 process_path() { /bin/ps -p "$1" -o comm= 2>/dev/null; }
 process_alive() { /bin/kill -0 "$1" 2>/dev/null; }
+diagnostic_process_ids() { /usr/bin/pgrep -x ExitIPMonitor 2>/dev/null; }
 same_file() { [ "$1" -ef "$2" ]; }
 native_cdhash() {
     bounded_command 5 code-identity /usr/bin/codesign -d --arch "$(/usr/bin/uname -m)" --verbose=4 "$1" 2>&1 |
@@ -55,8 +56,25 @@ heartbeat_matches() {
     [[ "$updated" =~ ^[0-9]+$ ]] && [ "$updated" -le "$6" ] && [ "$(($6 - updated))" -le 8 ]
 }
 
+collect_process_evidence() {
+    local app=$1 output=$2 phase=$3 pid running captured=1
+    for pid in $(diagnostic_process_ids); do
+        running=$(process_path "$pid")
+        running=${running%/Contents/MacOS/ExitIPMonitor}
+        same_file "$running" "$app" || verified_translocation "$running" "$app" || continue
+        captured=0
+        # Preserve the early sample; later evidence gets a different name. Cancellation
+        # needs at most one new sample, and reuses an early sample when available.
+        if [ "$phase" = cancelled ] && [ -s "$output/sample-$pid-early.txt" ]; then break; fi
+        diagnostic_command 5 "process-$pid" /bin/ps -p "$pid" -o pid,ppid,state,etime,comm > "$output/process-$pid-$phase.txt" 2>&1 || true
+        diagnostic_command 8 "sample-$pid" /usr/bin/sample "$pid" 2 10 -file "$output/sample-$pid-$phase.txt" >> "$output/process-$pid-$phase.txt" 2>&1 || true
+        [ "$phase" != cancelled ] || break
+    done
+    return "$captured"
+}
+
 collect_diagnostics() {
-    local app=$1 output=$2 pid running
+    local app=$1 output=$2
     step_log INFO "Collecting local diagnostics in $output (commands have individual deadlines)."
     [ -f "$output/identity.txt" ] || collect_launch_identity
     diagnostic_command 10 signature /usr/bin/codesign --verify --deep --strict --verbose=4 "$app" > "$output/signature.txt" 2>&1 || true
@@ -64,14 +82,8 @@ collect_diagnostics() {
     diagnostic_command 10 security-log /usr/bin/log show --last 10m --style compact --info --predicate \
         '(process == "syspolicyd" OR process == "amfid" OR process == "taskgated-helper" OR process == "coreauthd") AND (eventMessage CONTAINS[c] "exitipmonitor" OR eventMessage CONTAINS[c] "syspolicyd" OR eventMessage CONTAINS "missing LA entitlement")' \
         > "$output/security.txt" 2>&1 || true
-    for pid in $(/usr/bin/pgrep -x ExitIPMonitor 2>/dev/null); do
-        running=$(process_path "$pid")
-        running=${running%/Contents/MacOS/ExitIPMonitor}
-        same_file "$running" "$app" || verified_translocation "$running" "$app" || continue
-        diagnostic_command 5 "process-$pid" /bin/ps -p "$pid" -o pid,ppid,state,etime,comm > "$output/process-$pid.txt" 2>&1 || true
-        diagnostic_command 8 "sample-$pid" /usr/bin/sample "$pid" 2 10 -file "$output/sample-$pid.txt" >> "$output/process-$pid.txt" 2>&1 || true
-    done
-    if /usr/bin/grep -q '_dyld_start.*+ 0' "$output"/sample-*.txt 2>/dev/null; then
+    collect_process_evidence "$app" "$output" final || true
+    if /usr/bin/grep -q '_dyld_start.*+ 0' "$output"/sample-*-final.txt 2>/dev/null; then
         step_log ERROR "Process is blocked before application startup; inspect security.txt and the macOS approval dialog."
     fi
     step_log INFO "Diagnostics saved: $output. Review local paths before sharing."
@@ -81,7 +93,7 @@ diagnose_main() (
     # Subshell confines traps and diagnostic state when sourced by tests or another script.
     app=/Applications/ExitIPMonitor.app; launch=0; timeout=30; output=""; trace=0
     build=unknown; version=unknown; since=0; found=0; signature_valid=0
-    trace_pid=""; trace_started=""; diagnostic_output=""
+    trace_pid=""; trace_started=""; diagnostic_output=""; early_sampled=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --app|--timeout|--output)
@@ -128,7 +140,7 @@ diagnose_main() (
     if [ "$launch" = 1 ]; then
         # Do not mistake an older copy of the same name for this launch. Opening an already
         # running healthy copy is supported, but it must still produce a recent heartbeat.
-        for pid in $(/usr/bin/pgrep -x ExitIPMonitor 2>/dev/null); do
+        for pid in $(diagnostic_process_ids); do
             file=$(process_path "$pid")
             file=${file%/Contents/MacOS/ExitIPMonitor}
             if same_file "$file" "$app" || verified_translocation "$file" "$app"; then found=1; fi
@@ -150,6 +162,12 @@ diagnose_main() (
                 return 0
             fi
         done
+        if [ "$trace" = 1 ] && [ "$early_sampled" = 0 ] && [ "$((SECONDS - start))" -ge 5 ]; then
+            if collect_process_evidence "$app" "$output" early; then
+                early_sampled=1
+                step_log INFO 'Saved early process evidence while waiting for readiness.'
+            fi
+        fi
         if [ "$(((SECONDS - start) % 5))" = 0 ]; then
             step_log WAIT "No fresh readiness response yet; complete any macOS Open Anyway/authentication prompt."
         fi

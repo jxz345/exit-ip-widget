@@ -1,10 +1,9 @@
-#!/bin/sh
-# Installer package preinstall: quit a running Exit IP Monitor so Installer can replace it.
-pkill -x ExitIPMonitor 2>/dev/null
-i=0
-while pgrep -x ExitIPMonitor >/dev/null && [ "$i" -lt 10 ]; do
-    sleep 0.5
-    i=$((i + 1))
-done
-pkill -9 -x ExitIPMonitor 2>/dev/null
-exit 0
+#!/bin/bash
+# The package contains these current helpers beside this script, not in the old app.
+# Abort before replacing the bundle if a hung app or provider cannot be removed.
+set -uo pipefail
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+# System launchd cleanup is meaningful only on the running startup volume.
+[ "${3:-/}" = / ] || { echo 'Install on the running startup volume.' >&2; exit 1; }
+app="${2:-/Applications}/ExitIPMonitor.app"
+exec /bin/bash "$script_dir/cleanup-installation.sh" --app "$app"

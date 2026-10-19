@@ -2,6 +2,13 @@
 import Foundation
 import Security
 
+public struct KeychainCredentialBackend: CredentialBackend {
+    public init() {}
+    public func read(account: String) throws -> String? { try SecureTokenStore.read(account: account) }
+    public func save(_ value: String, account: String) throws { try SecureTokenStore.save(value, account: account) }
+    public func delete(account: String) throws { try SecureTokenStore.delete(account: account) }
+}
+
 public enum SecureTokenStore {
     public static let ipinfoLiteAccount = "ipinfo-lite-token"
     private static let service = "com.example.exitipmonitor"

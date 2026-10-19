@@ -273,6 +273,7 @@ struct DashboardView: View {
         case .coolingDown(let retryNotBefore): "Every enabled provider is paused or out of its daily budget. Lookups resume at \(retryNotBefore.formatted(date: .abbreviated, time: .shortened)); the last verified result stays shown."
         case .providerPaused(let provider, let retryNotBefore): "\(provider.displayName) refused requests (rate limit, quota, or credentials) and is paused until \(retryNotBefore.formatted(date: .abbreviated, time: .shortened)). The next check uses another enabled provider."
         case .waitingForMinimumInterval(let nextAllowed): "A refresh is queued for \(nextAllowed.formatted(date: .omitted, time: .standard)) to honor the 5-second minimum interval."
+        case .waitingForIPinfoToken: "Load or save your IPinfo token in Settings. The last verified result stays shown."
         case .failed(let message): message
         }
     }
@@ -609,8 +610,8 @@ private struct MonitoringSummary: View {
     private func providerState(_ provider: ProviderID) -> String {
         var notes: [String] = []
         if provider == monitor.preferences.provider { notes.append("next") }
-        if provider == .ipinfoLite, monitor.isIPinfoMissingToken {
-            notes.append("skipped: no token")
+        if provider == .ipinfoLite, monitor.isIPinfoTokenUnavailable {
+            notes.append("skipped: \(monitor.ipinfoCredentialStatus.lowercased())")
         } else if let pausedUntil = monitor.pausedUntil(provider) {
             notes.append("paused until \(pausedUntil.formatted(date: .omitted, time: .shortened))")
         } else if monitor.lookupBudget.isExhausted(provider) {
@@ -673,11 +674,14 @@ private struct TailscaleVergeProviderSection: View {
                 }
                 GroupCaption("The provider file is never imported: your profile's tailscale-live provider fetches it every 3 seconds.")
             } else {
-                Label(installer.monitorInstalled || installer.responderInstalled
-                      ? "Background provider setup is incomplete"
-                      : "Background provider is not installed", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                GroupCaption("Install the background provider to enable Tailscale routing in Clash Verge. Your saved profile stays available.")
+                if installer.monitorInstalled || installer.responderInstalled {
+                    Label("Background provider setup is incomplete", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                } else {
+                    Label("Optional background provider is not installed", systemImage: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+                GroupCaption("Exit IP monitoring works without this provider. Install it only to enable Tailscale routing in Clash Verge. Installation requires administrator authentication; your saved profile stays available.")
             }
 
             if installer.isInstalling {
@@ -727,8 +731,9 @@ private struct TailscaleVergeProviderSection: View {
 /// The full Clash Verge profile the app maintains: the proxy is entered here and kept in the Keychain,
 /// and the app writes ~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml (0600) for
 /// you to import into Clash Verge as its one Local profile. Nothing here writes into Clash Verge.
-private struct ClashVergeProfileSection: View {
+struct ClashVergeProfileSection: View {
     let providerInstalled: Bool
+    let credentials: CredentialSession
     @State private var name = ""
     @State private var type: ClashProxySettings.ProxyType = .socks5
     @State private var server = ""
@@ -738,7 +743,12 @@ private struct ClashVergeProfileSection: View {
     @State private var message: String?
     @State private var messageIsError = false
     @State private var fileExists = false
-    @State private var loaded = false
+    @State private var restoredSession = false
+
+    init(providerInstalled: Bool, credentials: CredentialSession = AppCredentials.proxy) {
+        self.providerInstalled = providerInstalled
+        self.credentials = credentials
+    }
 
     var body: some View {
         DashboardGroup("Clash Verge profile") {
@@ -777,10 +787,9 @@ private struct ClashVergeProfileSection: View {
                 GridRow {
                     DetailLabel(text: "")
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) {
-                            Button("Save Profile") { save() }
-                            Button("Remove", role: .destructive) { remove() }
-                                .disabled(!fileExists && name.isEmpty && server.isEmpty)
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) { profileActions }
+                            VStack(alignment: .leading, spacing: 8) { profileActions }
                         }
                         .buttonStyle(DashboardButtonStyle(minimumWidth: 120))
                         if let message {
@@ -799,21 +808,61 @@ private struct ClashVergeProfileSection: View {
                 }
             }
             .textFieldStyle(.roundedBorder)
-            GroupCaption("The proxy is kept in the Keychain; the profile file is readable only by you.")
+            .disabled(credentials.isBusy)
+            if credentials.isBusy {
+                GroupCaption("Waiting for Keychain… Complete any macOS access prompt. Monitoring continues.")
+            } else if credentials.state == .notLoaded {
+                GroupCaption("Saved profile not loaded. Use Load saved profile to read it from Keychain.")
+            }
+            GroupCaption("Keychain is accessed only when you load, save, or remove. The profile file is readable only by you.")
         }
-        .task { load() }
+        .task {
+            // Restoring this session's memory and inspecting file metadata do not read Keychain.
+            if !restoredSession, let text = credentials.value, let settings = ClashVergeProfile.decode(text) {
+                apply(settings)
+            }
+            restoredSession = true
+            refreshFileState()
+        }
     }
 
-    private func load() {
-        guard !loaded else { return }
-        loaded = true
-        if let settings = loadClashProxySettings() {
-            name = settings.name
-            type = settings.type
-            server = settings.server
-            port = String(settings.port)
-            username = settings.username
-            password = settings.password
+    private var profileActions: some View {
+        Group {
+            Button("Load saved profile") { Task { await loadSavedProfile() } }
+            Button("Save Profile") { Task { await save() } }
+            Button("Remove", role: .destructive) { Task { await remove() } }
+        }
+    }
+
+    private func apply(_ settings: ClashProxySettings) {
+        name = settings.name
+        type = settings.type
+        server = settings.server
+        port = String(settings.port)
+        username = settings.username
+        password = settings.password
+    }
+
+    private func loadSavedProfile() async {
+        guard await credentials.load() else {
+            if let error = credentials.errorMessage { show(error, error: true) }
+            return
+        }
+        guard let text = credentials.value else {
+            show("No saved profile found in Keychain; the existing file is unchanged", error: false)
+            return
+        }
+        guard let settings = ClashVergeProfile.decode(text) else {
+            show("The saved profile could not be decoded; the existing file is unchanged", error: true)
+            return
+        }
+        do {
+            let settings = try settings.validated()
+            try maintainClashVergeProfile(settings)
+            apply(settings)
+            show("Saved profile loaded · file up to date", error: false)
+        } catch {
+            show(error.localizedDescription, error: true)
         }
         refreshFileState()
     }
@@ -826,7 +875,7 @@ private struct ClashVergeProfileSection: View {
         }
     }
 
-    private func save() {
+    private func save() async {
         guard let portNumber = Int(port.trimmingCharacters(in: .whitespaces)) else {
             show(ClashProxySettings.ValidationError.invalidPort.localizedDescription, error: true)
             return
@@ -835,7 +884,11 @@ private struct ClashVergeProfileSection: View {
                                          username: username, password: password)
         do {
             let settings = try entered.validated()
-            try SecureTokenStore.save(ClashVergeProfile.encode(settings), account: ClashVergeProfile.keychainAccount)
+            let encoded = try ClashVergeProfile.encode(settings)
+            guard await credentials.save(encoded) else {
+                if let error = credentials.errorMessage { show(error, error: true) }
+                return
+            }
             let outcome = try maintainClashVergeProfile(settings)
             name = settings.name
             server = settings.server
@@ -850,9 +903,12 @@ private struct ClashVergeProfileSection: View {
     }
 
     /// Deletes the saved proxy and the generated file (the profile Clash Verge imported is its own copy).
-    private func remove() {
+    private func remove() async {
+        guard await credentials.remove() else {
+            if let error = credentials.errorMessage { show(error, error: true) }
+            return
+        }
         do {
-            try SecureTokenStore.delete(account: ClashVergeProfile.keychainAccount)
             if FileManager.default.fileExists(atPath: ClashVergeProfile.fileURL.path) {
                 try FileManager.default.removeItem(at: ClashVergeProfile.fileURL)
             }
@@ -978,16 +1034,18 @@ struct SettingsView: View {
                 // The active provider follows rotation, so offer the token whenever IPinfo Lite is enabled.
                 if preferences.provider == .ipinfoLite || preferences.providerPool.contains(.ipinfoLite) {
                     SecureField("IPinfo Lite token", text: $ipinfoToken)
+                        .disabled(monitor.ipinfoCredentials.isBusy)
                     HStack {
-                        Button("Save token") { saveToken() }
-                        Button("Remove token", role: .destructive) { removeToken() }
-                        if let tokenStatus {
-                            Text(tokenStatus)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                        Button("Load saved token") { Task { await loadToken() } }
+                        Button("Save token") { Task { await saveToken() } }
+                            .disabled(ipinfoToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        Button("Remove token", role: .destructive) { Task { await removeToken() } }
                     }
-                    Text("The token is stored in the macOS Keychain, not in the app-group defaults or widget data.")
+                    .disabled(monitor.ipinfoCredentials.isBusy)
+                    Text(monitor.ipinfoCredentials.isBusy ? "Waiting for Keychain… Complete any macOS access prompt." : (tokenStatus ?? monitor.ipinfoCredentialStatus))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("Load once per app session to enable automatic IPinfo monitoring. Keychain is accessed only when you load, save, or remove; the token is never stored in widget data.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else if preferences.provider == .ipapiCo {
@@ -1046,7 +1104,7 @@ struct SettingsView: View {
                                 Task { await monitor.testProvider(provider) }
                             }
                             // Without a token IPinfo Lite can only fail; rotation skips it until one is saved.
-                            .disabled(provider == .ipinfoLite && monitor.isIPinfoMissingToken)
+                            .disabled(provider == .ipinfoLite && monitor.isIPinfoTokenUnavailable)
                         }
                         Text(providerHealthSummary(provider, record: record))
                             .font(.footnote)
@@ -1115,7 +1173,7 @@ struct SettingsView: View {
         // useful size of its own.
         .frame(minWidth: 520, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
         .task {
-            ipinfoToken = (try? SecureTokenStore.read(account: SecureTokenStore.ipinfoLiteAccount)) ?? ""
+            if ipinfoToken.isEmpty { ipinfoToken = monitor.ipinfoToken ?? "" }
             diagnostics = monitor.diagnosticPreferences
         }
     }
@@ -1162,25 +1220,24 @@ struct SettingsView: View {
         monitor.apply(updated)
     }
 
-    private func saveToken() {
-        do {
-            try SecureTokenStore.save(ipinfoToken.trimmingCharacters(in: .whitespacesAndNewlines), account: SecureTokenStore.ipinfoLiteAccount)
-            tokenStatus = "Saved in Keychain"
-            monitor.ipinfoTokenSaved()
-        } catch {
-            tokenStatus = error.localizedDescription
-        }
+    private func loadToken() async {
+        if await monitor.loadIPinfoToken() {
+            ipinfoToken = monitor.ipinfoToken ?? ""
+            tokenStatus = monitor.ipinfoCredentialStatus
+        } else if let error = monitor.ipinfoCredentials.errorMessage { tokenStatus = error }
     }
 
-    private func removeToken() {
-        do {
-            try SecureTokenStore.delete(account: SecureTokenStore.ipinfoLiteAccount)
+    private func saveToken() async {
+        if await monitor.saveIPinfoToken(ipinfoToken) {
+            tokenStatus = "Saved in Keychain · available for this session"
+        } else if let error = monitor.ipinfoCredentials.errorMessage { tokenStatus = error }
+    }
+
+    private func removeToken() async {
+        if await monitor.removeIPinfoToken() {
             ipinfoToken = ""
-            tokenStatus = "Removed from Keychain; IPinfo Lite is skipped until a token is saved"
-            monitor.ipinfoTokenRemoved()
-        } catch {
-            tokenStatus = error.localizedDescription
-        }
+            tokenStatus = "Removed from Keychain; IPinfo Lite is skipped until a token is loaded or saved"
+        } else if let error = monitor.ipinfoCredentials.errorMessage { tokenStatus = error }
     }
 
     private func providerHealthSummary(_ provider: ProviderID, record: ProviderHealthRecord) -> String {
@@ -1188,8 +1245,8 @@ struct SettingsView: View {
         let attempt = record.lastAttempt?.formatted(date: .abbreviated, time: .shortened) ?? "never"
         let success = record.lastSuccess?.formatted(date: .abbreviated, time: .shortened) ?? "never"
         let failure = record.lastError.map { "last error \($0)" } ?? "no recent error"
-        if provider == .ipinfoLite, monitor.isIPinfoMissingToken {
-            return "Skipped: no token saved · Last success: \(success)"
+        if provider == .ipinfoLite, monitor.isIPinfoTokenUnavailable {
+            return "Skipped: \(monitor.ipinfoCredentialStatus) · Last success: \(success)"
         }
         return "Last attempt: \(attempt) · Last success: \(success) · \(budget) · \(failure)"
     }

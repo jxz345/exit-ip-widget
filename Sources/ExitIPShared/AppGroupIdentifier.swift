@@ -2,7 +2,11 @@ import Foundation
 
 public enum ExitIPAppGroup {
     /// Replace this value with the App Group registered for both Xcode targets.
+    #if EXIT_IP_TEST_HOST
+    public static let identifier = ProcessInfo.processInfo.environment["EXIT_IP_TEST_APP_GROUP"]!
+    #else
     public static let identifier = "group.com.example.exitipmonitor"
+    #endif
 
     public static var defaults: UserDefaults {
         UserDefaults(suiteName: identifier) ?? .standard

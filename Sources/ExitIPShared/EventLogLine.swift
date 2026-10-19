@@ -18,6 +18,8 @@ public enum EventLogLine {
         switch event {
         case "monitor_started": return "App started"
         case "monitor_stopped": return "App quit"
+        case "keychain_operation":
+            return "Keychain \(fields["operation"] ?? "operation") · \(fields["outcome"] ?? "unknown")"
         case "duplicate_launch_reopened": return "Existing app reopened · duplicate launch prevented"
         case "single_instance_lock_failed": return "App startup blocked · couldn't acquire the instance lock"
         case "refresh_requested":
@@ -111,6 +113,7 @@ public enum EventLogLine {
         case "fresh": "result under 2 min old"
         case "event_window": "absorbed by the check just run"
         case "burst_budget": "burst budget empty"
+        case "token_unavailable": "load or save the IPinfo token in Settings"
         case let other?: other.replacingOccurrences(of: "_", with: " ")
         case nil: "?"
         }

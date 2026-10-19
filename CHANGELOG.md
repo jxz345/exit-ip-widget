@@ -4,11 +4,60 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-The release workflow publishes the section for a tag as that release's notes.
+Use the section for a version as that release's notes.
 
-## [Unreleased]
+## [1.0] - 2026-10-19
 
-## [1.0] - 2026-10-18
+Replacement release **1.0 (8)**. Built and tested locally, published manually without GitHub
+Actions. The existing `v1.0` URLs and cask version `1.0` are retained. The release contains a
+universal ad-hoc signed app for macOS 14 or later, with menu-bar monitoring, dashboard,
+allowlist warnings, Event Log, WidgetKit widget, and a macOS 26 Control Center control.
+The optional Tailscale → Clash Verge integration requires explicit setup.
+
+### Install or replace an earlier 1.0 build
+
+```sh
+brew install --cask jxz345/tap/exit-ip-monitor
+```
+
+Existing Homebrew users must follow the README clean-uninstall migration for old cached
+hooks, clear the cached ZIP, and reinstall. `brew upgrade` cannot detect this same-version
+replacement. Installation requests no provider setup and startup accesses no Keychain.
+The app is not notarized: macOS may separately require **Open Anyway** and authentication.
+Normal launch and reinstall must be verified; the earlier macOS pre-entry approval stall
+is not claimed fixed. See README launch diagnostics.
+
+### Explicit Keychain access — build 1.0 (8)
+
+- Access Keychain only through **Load saved profile**, **Load saved token**, Save, or Remove.
+  Launching, opening windows, status checks, and automatic refresh make no credential reads.
+- Run credential operations on a serial background queue, keep the UI responsive while
+  macOS authentication is pending, and prevent duplicate or overlapping edits.
+- Cache explicitly loaded/saved credentials for the current app session. Anonymous providers
+  continue while IPinfo waits for its token; an IPinfo-only pool retains the last result and
+  spends no lookup until a token is loaded or saved.
+- Update the generated proxy profile only after explicit Load or Save. Failed reads preserve
+  existing files and cached values. Record credential operation/outcome/duration without secrets.
+- Skip the planned build 7 reboot comparison and test build 8 through the actual published
+  Homebrew tap. The Keychain change addresses the separate wait after application entry.
+
+### App-only installation and verified cleanup — included from build 1.0 (7)
+
+- Preserve early process evidence when launch tracing is cancelled, and distinguish a
+  pending macOS evaluation from startup observations and the diagnostic command's result.
+- Remove automatic provider installation from the companion Homebrew cask. Install the
+  optional provider only through the dashboard or an explicit administrator command.
+- Clean uninstall/reinstall verifies that app processes have exited, with targeted TERM/KILL
+  fallback for pre-startup hangs, and verifies removal of both provider services and files.
+  Cleanup failure prevents replacement; settings, credentials and logs are retained.
+- Package and shell replacement use the new cleanup helper. The cask embeds it, with a
+  one-time migration procedure for older cached uninstall hooks.
+- Show the absent provider as optional setup, with a visible authentication explanation.
+- Disable the GitHub Release workflow and remove its configuration. Replace all four v1.0
+  assets consistently and update the tap checksum only after verifying the downloads.
+- These release notes supersede the historical build 6 installation behavior below.
+
+## [1.0 build 6] - 2026-10-18 (historical)
 
 The first release: a menu-bar app showing your public exit IP address and country, with a
 dashboard, settings, an exit-IP allowlist warning, an event log, a WidgetKit widget, and a macOS 26

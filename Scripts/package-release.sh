@@ -13,8 +13,8 @@
 # .pkg without Installer or Gatekeeper, or downloads the .pkg from the GitHub release
 # v<version> of the origin remote (set EXIT_IP_RELEASE_REPO=owner/repo to override).
 #
-# Publish releases from .github/workflows/release.yml (push a v<version> tag), not from a
-# local run. The script checks for unwanted archive metadata; a locally created
+# Builds and checks artifacts locally; does not publish or invoke GitHub Actions.
+# The script checks for unwanted archive metadata; a locally created
 # com.apple.provenance attribute alone does not diagnose a Gatekeeper failure.
 
 set -euo pipefail
@@ -80,7 +80,10 @@ ditto -c -k --norsrc --noextattr --keepParent "$APP_BUNDLE" "$zip_path"
 printf '\n== Building installer package ==\n'
 pkg_work="$(mktemp -d -t exit-ip-pkg)"
 trap 'rm -rf "$pkg_work"' EXIT
-mkdir -p "$pkg_work/root" "$pkg_work/packages"
+mkdir -p "$pkg_work/root" "$pkg_work/packages" "$pkg_work/scripts"
+cp "$SCRIPT_DIR/pkg/preinstall" "$SCRIPT_DIR/pkg/postinstall" "$pkg_work/scripts/"
+cp "$KIT_ROOT/Sources/ExitIPDiagnostics/command-support.sh" \
+    "$KIT_ROOT/Sources/ExitIPDiagnostics/cleanup-installation.sh" "$pkg_work/scripts/"
 ditto "$APP_BUNDLE" "$pkg_work/root/ExitIPMonitor.app"
 pkgbuild --analyze --root "$pkg_work/root" "$pkg_work/components.plist"
 # Always install to /Applications: a relocatable bundle would update whichever copy with the same
@@ -92,7 +95,7 @@ pkgbuild \
     --root "$pkg_work/root" \
     --component-plist "$pkg_work/components.plist" \
     --install-location /Applications \
-    --scripts "$SCRIPT_DIR/pkg" \
+    --scripts "$pkg_work/scripts" \
     --identifier "$bundle_id.pkg" \
     --version "$version" \
     "$pkg_work/packages/ExitIPMonitor.pkg"
@@ -150,7 +153,7 @@ if (( ${#stamped[@]} > 0 )); then
         exit 1
     fi
     printf 'WARN  AppleDouble metadata in: %s\n' "${stamped[*]}"
-    printf '      Publish releases from .github/workflows/release.yml.\n'
+    printf '      Inspect archive metadata before distributing these artifacts.\n'
 else
     printf 'PASS  No AppleDouble entries in the zip or package.\n'
 fi
@@ -167,5 +170,5 @@ cat "$DIST_DIR/SHA256SUMS"
 printf '\nCask values for jxz345/homebrew-tap Casks/exit-ip-monitor.rb:\n'
 printf '  version "%s"\n  sha256 "%s"\n' "$version" "$(shasum -a 256 "$zip_path" | awk '{print $1}')"
 if [[ "${CI:-}" != "true" ]]; then
-    printf 'To publish, push the tag v%s; .github/workflows/release.yml builds and uploads on a clean runner.\n' "$version"
+    printf 'Artifacts built locally. Nothing was published and no workflow was invoked.\n'
 fi

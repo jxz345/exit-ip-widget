@@ -30,7 +30,6 @@ PKG_SHA256="${EXIT_IP_PKG_SHA256:-@PKG_SHA256@}"
 PKG_NAME="ExitIPMonitor-$VERSION.pkg"
 PKG_URL="${EXIT_IP_PKG_URL:-https://github.com/$RELEASE_REPO/releases/download/v$VERSION/$PKG_NAME}"
 APP_NAME="ExitIPMonitor.app"
-PROCESS_NAME="ExitIPMonitor"
 
 fail() { printf '\nERROR %s\n' "$1" >&2; exit 1; }
 
@@ -115,15 +114,10 @@ new_app="$(find "$work/expanded" -maxdepth 4 -name "$APP_NAME" -type d | head -1
 bounded_command 15 signature codesign --verify --deep --strict "$new_app" || fail "The app's signature does not verify."
 printf 'PASS  Signature verifies.\n'
 
-if pgrep -x "$PROCESS_NAME" >/dev/null; then
-    printf 'Quitting the running copy...\n'
-    pkill -x "$PROCESS_NAME" || true
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        pgrep -x "$PROCESS_NAME" >/dev/null || break
-        sleep 0.5
-    done
-    pkill -9 -x "$PROCESS_NAME" 2>/dev/null || true
-fi
+# Use the verified NEW helper: older installed bundles do not contain it. A failed cleanup
+# must leave the old bundle available for recovery, never continue into rm/copy.
+/bin/bash "$new_app/Contents/Resources/cleanup-installation.sh" --app "$app_path" \
+    || fail "Clean uninstall preparation failed. The existing app was not replaced."
 
 # macOS lets an app modify or replace another app's bundle only with App Management permission,
 # so a refusal here usually means the terminal itself is not allowed.
@@ -138,6 +132,7 @@ fi
 bounded_command 60 copy ditto "$new_app" "$app_path" || fail "Could not copy the app to $install_dir.
 $app_management_hint"
 printf 'PASS  Installed: %s\n' "$app_path"
+printf 'Optional provider not installed. Use Install Provider in the dashboard when needed.\n'
 
 if /bin/bash "$app_path/Contents/Resources/diagnose-launch.sh" --app "$app_path" --launch --timeout 60; then
     step_log PASS "Exit IP Monitor completed startup and its main thread is responding."

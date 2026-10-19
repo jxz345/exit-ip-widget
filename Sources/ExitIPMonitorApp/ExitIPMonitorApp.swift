@@ -13,12 +13,6 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
         installApplicationMenus()
         statusItem = StatusItemController(monitor: Self.monitor)
         Self.monitor.start()
-        LaunchDiagnostics.record("startup_profile_begin")
-        do {
-            try maintainClashVergeProfile()
-        } catch {
-            RuntimeLog.shared.error("clash_profile_write_failed", fields: ["error": error.localizedDescription])
-        }
         TailscaleVergeWatcher.shared.start()
         LaunchDiagnostics.record("startup_services_ready")
         // The app is menu-bar only, and a crowded menu bar can hide its item, so the very first
@@ -226,23 +220,14 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-/// The proxy saved from the dashboard (Keychain), or nil when none was saved.
-@MainActor
-func loadClashProxySettings() -> ClashProxySettings? {
-    guard let text = try? SecureTokenStore.read(account: ClashVergeProfile.keychainAccount) else { return nil }
-    return ClashVergeProfile.decode(text)
-}
-
 /// Keeps the full Clash Verge profile (~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml,
-/// mode 0600) current with the saved proxy and the app's template, at launch and on Save. Only the app
+/// mode 0600) current with the explicitly loaded/saved proxy and the app's template. Only the app
 /// writes it; no installer deploys it, and nothing is written into Clash Verge. Never logs the settings.
-/// Returns nil when no proxy has been saved.
 @MainActor
 @discardableResult
-func maintainClashVergeProfile(_ settings: ClashProxySettings? = nil) throws -> ClashVergeProfile.WriteOutcome? {
+func maintainClashVergeProfile(_ settings: ClashProxySettings) throws -> ClashVergeProfile.WriteOutcome {
     // An earlier build kept only the provider part here.
     try? FileManager.default.removeItem(at: ClashVergeProfile.legacyPartialFileURL)
-    guard let settings = settings ?? loadClashProxySettings() else { return nil }
     let outcome = try ClashVergeProfile.write(ClashVergeProfile.render(settings), to: ClashVergeProfile.fileURL)
     if outcome == .written {
         RuntimeLog.shared.info("clash_profile_written", fields: ["path": ClashVergeProfile.fileURL.path])

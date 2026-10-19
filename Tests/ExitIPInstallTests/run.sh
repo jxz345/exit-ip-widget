@@ -93,4 +93,10 @@ fi
 grep -q 'does not match release' "$fixture/install-output"
 echo 'PASS: generated installer rejects checksum mismatch before replacing the installed app'
 /bin/bash "$REPO/Tests/ExitIPInstallTests/trace_test.sh"
+/bin/bash "$REPO/Tests/ExitIPInstallTests/cleanup_test.sh"
+/bin/bash "$REPO/Tests/ExitIPInstallTests/reinstall_test.sh"
+if [ -n "${EXIT_IP_CASK_PATH:-}" ]; then
+    python3 "$REPO/Scripts/sync-homebrew-cleanup.py" --check "$EXIT_IP_CASK_PATH"
+    ruby "$REPO/Tests/ExitIPInstallTests/cask_test.rb" "$EXIT_IP_CASK_PATH"
+fi
 echo 'All installation tests passed.'

@@ -9,9 +9,8 @@
 #   sudo /bin/bash daemon.sh remove    unload both, delete their files and the grant, and remember
 #                                      the choice so Homebrew reinstalls don't turn it back on
 #   /bin/bash daemon.sh status         show what is installed and the current state (no root needed)
-# Homebrew runs `install` after every install and reinstall (cask postflight), unless the user ran
-# `remove`. A Mac without Tailscale or Clash Verge Rev still gets the daemon; it then serves Reject
-# with a reason the dashboard explains.
+# App installation and reinstallation never run `install`. Setup requires the dashboard's
+# Install Provider action or this explicit command. Without Tailscale it serves Reject.
 # The script is copied out of the source folder or app bundle on purpose: launchd must never run
 # root code from a location the user can modify.
 # Exit status: 0 done, 1 error, 2 usage, 3 monitor installed but port 18766 could not be freed
@@ -31,7 +30,7 @@ PORT=18766
 # Lets `brew uninstall` remove the daemon without a password (see grant_line); like Sleepless's grant.
 GRANT="/etc/sudoers.d/exitipmonitor-tailscale-verge"
 # Written in the user's home by `remove`, deleted by `install` (as the user, never as root); the
-# cask's postflight skips a Mac that has it, like Sleepless's service-off.
+# legacy casks use this marker; current app installs always leave the provider uninstalled.
 OPT_OUT="Library/Application Support/ExitIPMonitor/tailscale-verge-off"
 TAILSCALE_APP="/Applications/Tailscale.app"
 TAILSCALE_CLI="$TAILSCALE_APP/Contents/MacOS/Tailscale"
