@@ -29,7 +29,7 @@ git tag v1.0 && git push origin v1.0
 bash Scripts/package-release.sh   # local test build into dist/ only
 ```
 
-- Never publish release files built on this Mac. Files written here can carry this Mac's `com.apple.provenance` stamp, which the kernel won't let `xattr` remove. The stamp travels in the zip/pkg and stalls the app's launch on every other Mac. `package-release.sh` warns locally and fails in CI when a file carries extended attributes.
+- Never publish release files built on this Mac. Files written here can carry this Mac's `com.apple.provenance` stamp, which the kernel won't let `xattr` remove. The stamp travels in the zip/pkg, but it did not cause the pre-startup launch stall. That was macOS parking its own Open Anyway approval when Use Password was chosen while loginwindow's background Touch ID request ran. Lock and unlock the screen (or restart) to release it; the cask avoids it by removing quarantine after `codesign --verify` (README "First launch"). Check that log signature first. `package-release.sh` warns locally and fails in CI when a file carries extended attributes.
 - When a SwiftPM build fails, the first `error:` line in `swift-test.log` is the actionable one; trailing `error: Build failed` is just a summary.
 - App/widget targets need full Xcode with the macOS 26 SDK; they are not in `Package.swift`. Deployment target is macOS 14; `ExitIPControl` is `@available(macOS 26.0, *)`.
 - No linter/formatter is configured.

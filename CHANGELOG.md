@@ -14,6 +14,27 @@ universal ad-hoc signed app for macOS 14 or later, with menu-bar monitoring, das
 allowlist warnings, Event Log, WidgetKit widget, and a macOS 26 Control Center control.
 The optional Tailscale → Clash Verge integration requires explicit setup.
 
+### Homebrew first launch — cask update, no app rebuild
+
+- The launch stall's root cause is macOS, not the app. On macOS 27, choosing **Use Password** in
+  the **Open Anyway** authentication can cancel the approval when loginwindow has a background
+  Touch ID request running. macOS parks the approval until the next screen unlock, logout or
+  restart, or another Touch ID use. Until then every launch of the app from that path waits
+  before startup, quarantined or not. A restart seemed to fix it because it releases the
+  parked approval.
+- Before moving the app into place, the cask now verifies the staged app's signature and removes
+  its download quarantine (`preflight_steps`, no `sudo`). A Homebrew install opens with no
+  **Not Opened** dialog, no **Open Anyway** and no password. A failed signature check aborts
+  the install.
+- For a parked approval (the package, a copied app, or a leftover from an earlier attempt), lock
+  the screen (Control-Command-Q) and unlock it; the waiting app then starts. Approve **Open
+  Anyway** with Touch ID rather than **Use Password**.
+- Tested on the affected Mac, each trial starting from a fresh Gatekeeper prompt. **Use Password** parked the
+  approval; removing quarantine did not release it, but lock/unlock did. **Touch ID** approved
+  at once. The cask's preflight steps opened the app without a prompt on install and reinstall.
+- The release ZIP, its checksum and build 1.0 (8) are unchanged. The next build's
+  `diagnose-launch.sh` adds the lock/unlock hint to its blocked-before-entry error.
+
 ### Install or replace an earlier 1.0 build
 
 ```sh
@@ -23,12 +44,12 @@ brew install --cask jxz345/tap/exit-ip-monitor
 Existing Homebrew users must follow the README clean-uninstall migration for old cached
 hooks, clear the cached ZIP, and reinstall. `brew upgrade` cannot detect this same-version
 replacement. Installation requests no provider setup and startup accesses no Keychain.
-The app is not notarized: macOS may separately require **Open Anyway** and authentication.
+The app is not notarized. After verifying the signature, the cask removes the app's download
+quarantine, so Homebrew installs need no **Open Anyway** (see above).
 A real Homebrew install and reinstall passed, including termination of an actual hung app
 after normal Quit failed. The app and user-file checks passed and no provider was installed.
-Normal launch still stalled before application entry after approval on the affected Mac.
-The password prompt coincided with macOS Gatekeeper override authentication, not an app
-startup operation. See README launch diagnostics; this release does not fix that stall.
+The earlier stall before application entry after approval was macOS parking its own Gatekeeper
+override authentication, not an app startup operation. The cask update above avoids it.
 
 ### Explicit Keychain access — build 1.0 (8)
 

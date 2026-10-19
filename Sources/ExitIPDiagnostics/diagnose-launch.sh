@@ -85,6 +85,7 @@ collect_diagnostics() {
     collect_process_evidence "$app" "$output" final || true
     if /usr/bin/grep -q '_dyld_start.*+ 0' "$output"/sample-*-final.txt 2>/dev/null; then
         step_log ERROR "Process is blocked before application startup; inspect security.txt and the macOS approval dialog."
+        step_log INFO "If Open Anyway was completed with Use Password, macOS may still hold that approval: lock the screen (Control-Command-Q) and unlock it."
     fi
     step_log INFO "Diagnostics saved: $output. Review local paths before sharing."
 }

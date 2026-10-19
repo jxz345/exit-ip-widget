@@ -24,8 +24,9 @@ forced multiple instances through `LSMultipleInstancesProhibited` ([Apple docume
 Installation is **app-only**. Exit IP monitoring works without the optional
 [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon).
 To enable that integration later, click **Install Provider** in the dashboard. Only that
-explicit setup action requests provider administrator authentication. macOS may separately
-require **Open Anyway** approval for the app.
+explicit setup action requests provider administrator authentication. Before moving the app
+into place, the cask verifies its signature and removes its download quarantine, so the first
+launch needs no **Open Anyway** approval or password. See [First launch](#first-launch).
 
 The `v1.0` release contains **1.0 (8)**, built and tested locally without GitHub Actions.
 The published cask installs only the app. Keychain access starts only when you explicitly
@@ -33,9 +34,10 @@ Load, Save, or Remove credentials; startup and automatic refresh do not read Key
 Existing installations retain cached uninstall hooks; follow
 [Clean uninstall and reinstall](#clean-uninstall-and-reinstall) when migrating them.
 
-Build 8 passed a real Homebrew install and reinstall, including termination of an actual hung
-app process. On the affected Mac, launch still stalls before application entry after normal
-macOS approval. See [installation history](#installation-history-and-remaining-launch-failure).
+Earlier installs stalled before startup until the Mac restarted. The cause was a macOS approval
+that macOS itself had parked, not the app. A restart released the parked approval; locking and
+unlocking the screen does the same within seconds. See
+[installation history and root cause](#installation-history-and-root-cause).
 
 | Task | Command |
 | --- | --- |
@@ -98,21 +100,52 @@ command and retry. The app remains available when cleanup fails.
 
 ### First launch
 
-The release is ad-hoc signed and not notarized; notarizing needs a paid Apple Developer account. Homebrew also keeps the download quarantine, because its `--no-quarantine` option is deprecated. So macOS checks the first launch with Gatekeeper: approve it in **System Settings → Privacy & Security → Open Anyway**.
+The release is ad-hoc signed and not notarized; notarizing needs a paid Apple Developer account.
+Homebrew quarantines every download (it no longer offers `--no-quarantine`), and a quarantined
+copy of an unnotarized app needs Gatekeeper's **Open Anyway** approval. Before Homebrew moves
+the app into place, the cask therefore runs Sleepless's app-scoped recovery on the staged copy:
+`codesign --verify --deep --strict`, then `xattr -dr com.apple.quarantine` for this app only. A
+failed signature check aborts the install. The installed app then opens like a local build.
+Gatekeeper still scans it, and `syspolicyd` logs `GK evaluateScanResult: 2`, but there is no
+**Not Opened** dialog and no password. No Gatekeeper setting or other app is changed.
 
-Build 1.0 (2) was observed stalled on macOS 27 before application code ran: its process
-existed, but no menu-bar flag or dashboard appeared. If using that build, install the current
-v1.0 rebuild with the reinstall command above. Close any **"ExitIPMonitor" Not Opened** dialog
-with **Done**, then complete **Open Anyway** and macOS authentication if requested. Use the
-launch check below to confirm startup. The successful build 1.0 (3) installation retained
-quarantine; removing quarantine or disabling Gatekeeper was not needed. The cask now prints
-the launch check rather than quarantine-removal instructions.
+**Why the cask does this.** On macOS 27, **Open Anyway** asks for administrator authentication,
+offering Touch ID and a **Use Password** button. loginwindow can have its own background Touch ID
+request running; this was seen after a Touch ID unlock on a Mac with a second account.
+Choosing **Use Password** then lets that request take Touch ID back and cancel the approval
+(`coreauthd`: "Canceled by another authentication"). The password dialog stays open and accepts
+the password, but macOS discards the result and parks the approval. While it is parked, every
+launch of the app from that path waits before startup, quarantined or not. `syspolicyd` logs
+"waiting on another evaluation", and the 96 KB process samples at `_dyld_start + 0`. macOS
+retries the parked approval only when loginwindow's request ends: at the next screen unlock, a
+logout or restart, or another Touch ID use. That is why a restart appeared to fix the stall.
+
+The package and copied apps still need **Open Anyway**, and a leftover parked approval can still
+block any install route. If an app waits before startup after an approval:
+
+1. Lock the screen (**Control-Command-Q**) and unlock it. Within seconds `syspolicyd` logs
+   `Allowing code due to user override` and the waiting app starts, with no relaunch. A restart
+   also works.
+2. When you approve with **Open Anyway**, authenticate with **Touch ID** instead of **Use
+   Password**. In testing, Touch ID completed the approval at once even with loginwindow's
+   request running.
+
+Removing quarantine, Sleepless's manual recovery, does not release a parked approval. In
+testing, the copy without quarantine still waited until step 1. To check for a parked approval
+(read-only; in zsh `log` is a builtin, so use `/usr/bin/log`):
+
+```sh
+/usr/bin/log show --last 2h --style compact --predicate 'process == "syspolicyd" AND (eventMessage CONTAINS "Getting auth to allow override" OR eventMessage CONTAINS "Allowing code due to user override")'
+```
+
+A `Getting auth to allow override` line with no later `Allowing code due to user override` means
+an approval is still parked.
 
 A `com.apple.provenance` attribute is not evidence that a build came from another Mac.
-macOS can create it locally during Gatekeeper evaluation. Historical build 6 used
-GitHub Actions; the replacement build 8 is built and tested locally without Actions. Verify the download checksum and signature
-to identify the installed build.
-Do not delete security databases or disable Gatekeeper to diagnose this problem.
+macOS creates it locally during Gatekeeper evaluation, and it played no part in the stall.
+Historical build 6 used GitHub Actions; the replacement build 8 is built and tested locally
+without Actions. Verify the download checksum and signature to identify the installed build.
+Do not delete security databases or disable Gatekeeper to diagnose launch problems.
 
 ### Launch diagnostics
 
@@ -156,6 +189,10 @@ signature, attribute, app-specific security-log and process-sample checks. A sam
 `app_ready` identifies the last completed app stage. The main thread refreshes its readiness
 record every two seconds; a record more than eight seconds old is rejected.
 
+`blocked_before_entry` after an **Open Anyway** approval usually means macOS parked that
+approval (see [First launch](#first-launch)). Lock the screen and unlock it; the checker in
+the next build prints that hint with the blocked-process error.
+
 The release installer saves `install-*` in the same Logs folder. Root daemon setup saves
 `/Library/Logs/ExitIPMonitor/daemon-install-*` and removal saves `daemon-remove-*`.
 Step logs include UTC time, duration, timeout and exit status. These diagnostics stay local;
@@ -164,7 +201,7 @@ The launch checker never changes quarantine, signatures, or system security sett
 
 If macOS says the app **is damaged and can't be opened**, the copy predates the current release and has only a partial signature. Install the current release.
 
-### Installation history and remaining launch failure
+### Installation history and root cause
 
 Verified on **2026-10-19**: replacing the stalled build 1.0 (2) with the GitHub-built
 **1.0 (3)** resolved the observed launch failure. The published ZIP passed checksum and
@@ -244,18 +281,47 @@ files and retained quarantine; existing profile and preference file hashes were 
 The app was left installed and stopped with no provider. Homebrew lifecycle acceptance passed;
 live launch, dashboard, and monitoring acceptance remain blocked by the pre-entry stall.
 
-The implementation follows Sleepless's ad-hoc signing, normal macOS approval, and Homebrew
-service implementation. Provider setup is now explicitly deferred to the dashboard. The launch diagnostics replace the old `pgrep` success check
-with a fresh main-thread heartbeat tied to the installed build, add startup milestones, and
-put deadlines and timestamped logs around installer and daemon commands. The exact cause
-of the original macOS authentication stall remains unproven; the evidence does not justify
-changing the widget, dropping an architecture, or treating provenance metadata as corruption.
+**Root cause, established 2026-10-20.** The affected Mac's unified log recorded seven
+**Open Anyway** approvals in four days, all with **Use Password**:
+- Six started while loginwindow's background Touch ID request was running (`coreauthd`:
+  `replaced: <… pid:409 …>`). In each, **Use Password** let that request resume and cancel the
+  approval ("Canceled by another authentication").
+- Those approvals stayed parked for 26–69 minutes, until a screen unlock, restart, or other
+  Touch ID use. That end was logged as `retrying request`, then `Allowing code due to user
+  override`.
+- The one approval that started without that request completed instantly.
+
+The build 7 `/Applications` copy above had no quarantine and still stalled, because an approval
+for that path was parked; its Release-directory copy used another path and ran. This accounts
+for every pre-entry stall recorded above, including the "SessionAgent endpoint", stashed
+request and "waiting on another evaluation" observations. No app code ran in any of them.
+
+Live trials the same night, each starting from a fresh first-launch prompt. The second and
+third used new bundle identities in new folders, because Gatekeeper skips an identity that
+has been approved and has run:
+- **Approval with Use Password** parked as predicted. Sleepless's manual recovery (quit, verify,
+  `xattr -dr com.apple.quarantine`, open) still waited at `_dyld_start`. Lock and unlock released
+  it in about two seconds: the waiting process started, reached readiness and completed a lookup.
+- **Approval with Touch ID** completed in about two seconds, with loginwindow's request running.
+- **The cask's preflight steps** left no quarantine on the installed app. It opened with no dialog
+  or password (`GK evaluateScanResult: 2`), reached readiness within a second, and did the same
+  after a reinstall.
+
+The published cask now uses the third approach; build 8's ZIP and checksum are unchanged.
+
+The implementation follows Sleepless's ad-hoc signing and Homebrew service implementation.
+Sleepless's cask leaves quarantine removal to the user as a recovery; this cask applies the
+same app-scoped commands before the first launch. Provider setup is explicitly deferred to the
+dashboard. The launch diagnostics replace the old `pgrep` success check with a fresh
+main-thread heartbeat tied to the installed build, add startup milestones, and put deadlines and
+timestamped logs around installer and daemon commands. The fix needed no change to the app, the
+widget, or the architectures, and provenance metadata was not involved.
 
 ### Without Homebrew
 
 Each [release](https://github.com/jxz345/exit-ip-widget/releases) also has an Installer package, an install script, and `SHA256SUMS`. Check downloads with `shasum -a 256 -c SHA256SUMS`.
 
-- **`ExitIPMonitor-<version>.pkg`:** double-click it and click **Done** at the "can't verify" warning. Then click **Open Anyway** in **System Settings → Privacy & Security**, and enter your password in Installer.
+- **`ExitIPMonitor-<version>.pkg`:** double-click it and click **Done** at the "can't verify" warning. Then click **Open Anyway** in **System Settings → Privacy & Security**, authenticate with Touch ID, and enter your password in Installer. If Installer doesn't open after **Open Anyway**, lock the screen and unlock it ([why](#first-launch)).
   - The package is unsigned, because signing one needs a Developer ID Installer certificate.
   - It installs to `/Applications`, verifies app and provider cleanup first, and launches the new app afterwards.
   - Installer doesn't quarantine what it installs, so the app needs no second approval.
@@ -273,7 +339,7 @@ Each [release](https://github.com/jxz345/exit-ip-widget/releases) also has an In
   - launches the app and waits up to 60 seconds for a fresh main-thread readiness response.
 
   With the package already in Downloads, `bash ~/Downloads/install.sh` uses the newest matching `ExitIPMonitor-<version>*.pkg` there instead; browsers save repeat downloads as `… (1).pkg`. Run it with `bash`, because a quarantined script run directly can be blocked. If replacing the app fails with **Operation not permitted**, allow the terminal under **App Management**. If the app does not become ready, it exits with an error and prints the directory containing bounded launch diagnostics.
-- **A copied app**, for example one sent by AirDrop, is quarantined. Use the current release, complete normal macOS approval, and run the launch check above.
+- **A copied app**, for example one sent by AirDrop, is quarantined. Use the current release and approve it with **Open Anyway**, authenticating with Touch ID. If it then waits before startup, lock and unlock the screen ([why](#first-launch)). Run the launch check above.
 
 ### What the downloaded build can't do
 
@@ -306,12 +372,12 @@ The implementation follows Apple’s Liquid Glass guidance for macOS 26+ without
 | **Dashboard window** | The persistent menu-bar flag opens the single retained dashboard directly. A normal titled, resizable primary window participates in Mission Control, App Exposé, Cmd-Tab, full screen, and window cycling. The Dock icon remains while the dashboard is open or minimized and disappears when it closes, even if Settings or Event Log remain open; monitoring continues. Reopening brings the same window onto the active desktop, restores its remembered frame, and repeats focus after the Dock transition; disconnected displays are handled. Default size is 1000 × 860, clamped to the display. Two columns become one below 960 points, preserving unsaved profile edits; content scrolls and the footer stays available. The left column contains current exit IP, country, location, network, timezone, update time/age, source, the allowlist, and the Clash Verge profile editor. The right contains Monitoring, provider setup/status, and Apply in Clash Verge. Profile fields use full-width label/value rows. Buttons use consistent native regular sizing, minimum widths, and equal widths for paired actions; icon-only removal controls have accessible labels and tooltips. File/URL rows show a single truncated value with its full tooltip and aligned actions beneath. Monitoring shows schedule, highlights, provider order/health/daily budgets, login control, Edit in Settings, and Event Log. Event Log shows the last 500 important UTC-stamped events, updates live, and offers Copy All and Show Log Files. Missing Clash Verge has an installation note; installed Clash Verge has an Open action and import steps. Stale data, country changes, and errors remain visible, with Refresh now, Dismiss, Turn Off Highlights, and Clear error actions. The footer offers Settings, Clear indicators, Quit Exit IP, and monitoring status. |
 | **Menu-bar interaction** | The status item remains present with or without windows and updates its flag/name, error symbol, stale marker, and country-change highlight. Clicking opens the dashboard without a popup. Standard app menus provide Settings (Cmd-,), Close Window (Cmd-W), Dashboard (Cmd-1), Minimize (Cmd-M), editing commands, and Quit (Cmd-Q). |
 | **Dashboard daemon installation** | App-only installs show the absent provider as optional, with a visible administrator-authentication explanation. Exit IP monitoring works without it. Incomplete provider setup is visible, with **Install Provider** or **Retry Installation**. Native macOS authentication runs the bundled installer, off the main thread. Both services must be loaded before success. Cancellation, errors, expandable output, and a local log link remain visible. Profile editing and import instructions remain available throughout; no app restart is needed after setup. |
-| **Installation diagnostics** | Checksum and strict signature verification, timestamped installer and daemon logs, main-thread launch readiness with PID/path/build validation, bounded command execution, and process samples. Optional external `--trace` starts before launch and records Gatekeeper/authentication decisions at information level, code identities, startup records, a concise result summary and incomplete-evidence notices. Early samples survive cancellation; startup observations and app-associated pending evaluations are reported separately from the command result. Collectors stop on every exit path. Normal Gatekeeper approval is retained. External cleanup logs record process termination and verified provider removal before uninstall/reinstall; cleanup failures abort replacement. |
+| **Installation diagnostics** | Checksum and strict signature verification, timestamped installer and daemon logs, main-thread launch readiness with PID/path/build validation, bounded command execution, and process samples. Optional external `--trace` starts before launch and records Gatekeeper/authentication decisions at information level, code identities, startup records, a concise result summary and incomplete-evidence notices. Early samples survive cancellation; startup observations and app-associated pending evaluations are reported separately from the command result. Collectors stop on every exit path. A blocked-before-entry result also names the recovery for an approval macOS parked: lock and unlock the screen. External cleanup logs record process termination and verified provider removal before uninstall/reinstall; cleanup failures abort replacement. |
 | **Settings window** | Opened from the app menu (Cmd-,) or the **Settings** button in the dashboard; a retained AppKit window (like the dashboard) so it reliably comes to the front, at about 560 × 700 on the screen with the pointer (smaller screens get a window that fits). Sections: **Menu bar** display style, **Change attention** highlights, **Startup** (Launch at login + Open Login Items Settings), **Refresh** frequency, **IP location service** (provider pool, per-provider health and a **Test** action that checks exactly that provider—skipped, not redirected, while it is paused or out of daily budget, IPinfo Lite token controls with explicit **Load saved token**, **Save token**, and **Remove token**; IPinfo is skipped until a token is loaded or saved for the session), and **Diagnostics** (clear indicators, redacted logs with configurable retention). Debug builds also expose in-memory failure simulations for manual QA. |
 | **Exit-IP allowlist warning** | The dashboard holds exact IPv4/IPv6 addresses you expect to exit from (empty list = no warnings). When a fresh, successful lookup returns an address outside the list, an **Exit IP Not Allowed** warning window opens once per address, and the dashboard show an orange **Exit IP not on the allowlist** notice. The app **only warns**: it never blocks or changes networking, and the menu bar keeps showing the country. Failed lookups never warn. See [allowlist details](#exit-ip-allowlist-warning). |
 | **Tailscale → Clash Verge provider (root daemon)** | For Clash Verge Rev (Mihomo) next to the native Tailscale client: keeps one proxy-provider member, `TS-NATIVE`, bound to the current, verified Tailscale `utunN` and serves it at `http://127.0.0.1:18766/provider.yaml`, so a reconnect that renumbers the tunnel needs no profile reload. **Optional: installed only by the dashboard’s Install Provider action** or explicit `sudo /bin/bash …/daemon.sh install`. App installs and reinstalls leave it absent. Install stops whatever else holds the port (a launchd job is disabled so it stays off). If explicitly installed without Tailscale or Clash Verge Rev, setup prints which app is missing, the provider serves Reject with a [plain-language reason](#reasons) (**Reject · Tailscale isn't installed**), and the dashboard's **Clash Verge** row says when nothing uses the provider. A **removal grant** in `/etc/sudoers.d/` lets `brew uninstall` remove the daemon without a password; it allows only unloading the two jobs, restarting the monitor, and deleting the daemon's files and the grant. `daemon.sh remove` turns the daemon off and retains its legacy opt-out marker. Reinstalls always leave the provider off, whether or not that marker exists. A root monitor checks the route to `100.100.100.100`, the Tailscale CLI's address (run as the console user), and interface ownership every 2 seconds and writes `provider.yaml`. A launchd-held loopback socket serves that file as `nobody`, closes stalled or incomplete HTTP requests without a response, and serves Reject whenever Tailscale can't be verified or the last check is more than 12 seconds old. The dashboard shows its status in plain words, the file's location (**Open File**, **Show in Finder**), the address it is served at (**Open in Browser**), and whether Clash Verge Rev is installed (**Open**). The dashboard's **Clash Verge profile** group takes your proxy (server, port, username, password; kept in the Keychain). The app writes a complete Clash Verge profile with it, including the provider, to `~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml` (0600; never committed or logged; no installer writes it). It shows the file's location (**Open File**, **Show in Finder**) and how to import it into Clash Verge as its one Local profile. See [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon). |
 | **Refresh engine** | Checks immediately on launch when an enabled provider is eligible; IPinfo waits for an explicitly loaded or saved session token; offers an opt-in **Launch at login** setting (in the dashboard's Monitoring group and Settings → Startup); refreshes after any network-environment change (gateway/default route, routing table including TUN split routes, interface or address, proxy, DNS, VPN/tunnel), system wake, screen wake, session activation, and app activation; supports explicit **Refresh now** buttons; uses a true 15-minute default cadence; persists the last successful result; and balances promptness against provider quotas with **immediate-then-wait** event handling (the first network/system event is checked at once; further events in the next 5 seconds become one trailing lookup on the next provider in the pool) and a layered [lookup budget](#lookup-budget-prompt-checks-vs-api-limits): a hard five-second gap per provider, a 6-lookup burst allowance refilling one every 2 minutes that throttles only follow-ups (a storm lasting over 30 seconds, retries) and routine triggers—**a real network change is never queued behind it**—freshness skipping for routine triggers, per-provider daily budgets at 80% of documented limits, and cooldowns after rate-limit/quota/auth refusals (a paused provider is skipped by normal rotation; the refused request is never retried elsewhere, and a pause never hides the last verified location). `NWPathMonitor` updates that report an unchanged path are ignored. A newly started lookup supersedes any queued one. |
-| **Release packaging (install on another Mac)** | `Scripts/package-release.sh` locally builds a universal (Apple silicon + Intel) Release app, seals it with ad-hoc signing, verifies both architectures and the packaged signature, and writes an app ZIP, `.pkg`, `install.sh`, and `SHA256SUMS`. Build 8 is published manually as the replacement v1.0 release without GitHub Actions. The app runs unsandboxed; the sandboxed widget requires a registered App Group to share its data. The updated Homebrew cask installs only the app, retains normal quarantine, and requires verified process and provider cleanup on uninstall/reinstall. The package and shell installer use the same cleanup before replacement. Provider installation requires the explicit dashboard action. Local build success does not establish normal downloaded-app Gatekeeper approval. See [Install](#install) and [Publishing a release](#publishing-a-release). |
+| **Release packaging (install on another Mac)** | `Scripts/package-release.sh` locally builds a universal (Apple silicon + Intel) Release app, seals it with ad-hoc signing, verifies both architectures and the packaged signature, and writes an app ZIP, `.pkg`, `install.sh`, and `SHA256SUMS`. Build 8 is published manually as the replacement v1.0 release without GitHub Actions. The app runs unsandboxed; the sandboxed widget requires a registered App Group to share its data. The Homebrew cask installs only the app. Before moving it into place, it verifies the sealed signature and removes that app's download quarantine, so a Homebrew install opens without **Open Anyway** or a password. It requires verified process and provider cleanup on uninstall/reinstall. The package and shell installer use the same cleanup before replacement. Provider installation requires the explicit dashboard action. The package and copied apps still need **Open Anyway**: use Touch ID, and lock and unlock the screen if macOS parks the approval. See [Install](#install) and [Publishing a release](#publishing-a-release). |
 | **Explicit Keychain access** | Only Load, Save, and Remove access credentials, on a serial background worker. Startup, window opening, provider selection, and automatic refresh never read Keychain. The UI distinguishes not loaded, pending, available, missing, and failed; affected controls wait while the rest of the app remains responsive. Loaded tokens stay in memory until quit; existing Keychain identifiers and credentials are preserved. |
 | **Privacy and resilience** | The selected provider sees the public IP address. Provider credentials are kept in the macOS Keychain; the widget receives only the non-secret snapshot through the App Group. |
 
@@ -903,11 +969,11 @@ The script warns when the ZIP or package carries AppleDouble metadata. Inspect i
 1. Back up the existing release assets and tag commit before replacing a release. Commit the matching source and documentation, then update the tag with an explicit lease on its previous commit.
 2. Upload the ZIP, package, and installer with `gh release upload TAG --clobber`, then upload `SHA256SUMS`. Set release notes with `gh release edit TAG --notes-file FILE`; do not claim a GitHub build attestation.
 3. Download the published assets again and verify their checksums, signatures, and bundle build. Only then push the matching checksum and cleanup hook to `jxz345/homebrew-tap`.
-4. Test a normal Homebrew install, launch, and reinstall with quarantine retained. Replacing `v1.0` keeps cask version `1.0`, so existing users need `brew reinstall`, not `brew upgrade`.
+4. Test a normal Homebrew install, launch, and reinstall. The cask's preflight steps must pass, the installed app must carry no `com.apple.quarantine`, and it must open without a Gatekeeper dialog. Replacing `v1.0` keeps cask version `1.0`, so existing users need `brew reinstall`, not `brew upgrade`.
 
 For build 8, reuse the already validated signed app and ZIP when preparing companion artifacts; rebuilding or re-signing would create a different candidate. Local build success alone does not validate downloaded-app Gatekeeper approval.
 
-Only Developer ID signing plus notarization, which needs a paid developer team, removes the Gatekeeper approval described in [First launch](#first-launch).
+The Homebrew cask avoids the Gatekeeper approval described in [First launch](#first-launch) by removing this app's download quarantine. For the package and copied apps, only Developer ID signing plus notarization, which needs a paid developer team, removes it.
 
 Inspect a built bundle before installing or requesting a signed build with the read-only diagnostics helper:
 
@@ -962,8 +1028,8 @@ The running app writes JSON-lines diagnostics to `~/Library/Application Support/
 | Compile and locally inspect the app bundle | **No** | The app bundle is created at the Debug path above and ad-hoc signed. |
 | Menu-bar app only, launched locally | **No** | The ad-hoc signed app runs unsandboxed and works from the Debug path above. It is not a sandboxed or notarized installation. |
 | Widget, Control Center control, and shared snapshot data | **Yes** | The app and extension need an App Group registered under the same developer team so they can share the stored exit-IP snapshot. |
-| Copy the menu-bar app to another Mac | **No** | `brew install --cask jxz345/tap/exit-ip-monitor`, or the release's `.pkg` / `install.sh` from `Scripts/package-release.sh` (ad-hoc signed, universal). The first launch may need normal Gatekeeper approval; verify readiness as described in [Install](#install). The widget still needs a registered App Group. |
-| Sign, install reliably, or distribute without a Gatekeeper prompt | **Yes** | Supply a real team and registered App Group using `--signed-build`. Notarization is additionally required for distribution without the **Open Anyway** step. |
+| Copy the menu-bar app to another Mac | **No** | `brew install --cask jxz345/tap/exit-ip-monitor`, or the release's `.pkg` / `install.sh` from `Scripts/package-release.sh` (ad-hoc signed, universal). A Homebrew install opens without Gatekeeper approval. The package and copied apps need **Open Anyway** ([First launch](#first-launch)). Verify readiness as described in [Install](#install). The widget still needs a registered App Group. |
+| Sign, install reliably, or distribute without a Gatekeeper prompt | **Yes** | Supply a real team and registered App Group using `--signed-build`. Notarization is additionally required for distribution outside Homebrew without the **Open Anyway** step. |
 
 Apple documents that an App Group lets an app and its extension share a container and that Xcode retrieves groups from the developer account. Therefore, this project’s full menu-bar + widget + Control Center design cannot be correctly installed without an Apple developer team and a registered App Group. See Apple’s [Configuring app groups](https://developer.apple.com/documentation/xcode/configuring-app-groups).
 
@@ -1079,7 +1145,8 @@ Changing a gateway, route, interface, system proxy, or enabling/disabling a TUN/
 
 | Check | Expected result |
 | --- | --- |
-| Install on another Mac | Build locally, verify checksums, both architectures and strict signatures, and inspect archives for AppleDouble metadata. With the updated cask, fresh installation creates no provider jobs or grant. Normal Open Anyway approval must produce a fresh matching heartbeat and a successful lookup. Package and shell installs behave likewise. Local unquarantined launch does not count as passing downloaded-app approval. |
+| Install on another Mac | Build locally, verify checksums, both architectures and strict signatures, and inspect archives for AppleDouble metadata. With the updated cask, fresh installation creates no provider jobs or grant. A Homebrew install must open without a Gatekeeper dialog and produce a fresh matching heartbeat and a successful lookup. Package and shell installs behave likewise after their approval. A local unquarantined build does not count as a downloaded-app test. |
+| Homebrew first launch | Test with an app identity this Mac has never approved, because an approved one opens regardless. Run `brew install --cask jxz345/tap/exit-ip-monitor`, then `brew reinstall`. Both preflight steps pass, and `xattr -lr /Applications/ExitIPMonitor.app \| grep -c com.apple.quarantine` prints 0. After `open` there is no Not Opened or Open Anyway dialog. The runtime log has `app_ready` and `lookup_succeeded`, and `syspolicyd` logs `GK evaluateScanResult: 2` without `Prompt shown`. A bundle that fails `codesign --verify` aborts the install before `/Applications` changes. With an approval parked by an earlier **Use Password** attempt, lock and unlock the screen: `Allowing code due to user override` follows and the waiting app starts. `EXIT_IP_CASK_PATH=<tap>/Casks/exit-ip-monitor.rb bash Tests/ExitIPInstallTests/run.sh` checks the declared steps. |
 | First launch and reopen | On a Mac that has never run the app, the first launch opens the dashboard. Quit and relaunch: only the menu-bar item appears. Open the app again from Finder while it runs: the dashboard comes forward. |
 | Explicit credential access | Launch with saved credentials, open dashboard/Settings, reopen, and refresh: no `keychain_operation` or credential prompt. Explicit Load populates fields; cancel/deny approval and verify an error with the existing profile unchanged. Hold an approval request open: other controls and launch heartbeats keep responding, and duplicate credential actions are disabled. Load/Save enables IPinfo for this session; Remove stops its use without a lookup. Relaunch returns to not loaded. Run `bash Tests/ExitIPAppTests/run.sh` for isolated fake-backend/provider checks and off-screen control renders, plus the shared credential tests. |
 | Launch failure diagnostics | A blocked process without `app_ready`, an old build, an old heartbeat, or another bundle cannot produce success. A failure exits within its deadline and saves app-specific evidence. `bash Tests/ExitIPInstallTests/run.sh` passes. |
