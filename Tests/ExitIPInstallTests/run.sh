@@ -92,4 +92,5 @@ fi
 [ -f "$fixture/Applications/ExitIPMonitor.app/preserve" ]
 grep -q 'does not match release' "$fixture/install-output"
 echo 'PASS: generated installer rejects checksum mismatch before replacing the installed app'
+/bin/bash "$REPO/Tests/ExitIPInstallTests/trace_test.sh"
 echo 'All installation tests passed.'

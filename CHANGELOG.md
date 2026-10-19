@@ -14,7 +14,7 @@ The first release: a menu-bar app showing your public exit IP address and countr
 dashboard, settings, an exit-IP allowlist warning, an event log, a WidgetKit widget, and a macOS 26
 Control Center control. It also runs the Tailscale → Clash Verge provider and maintains the Clash
 Verge profile that uses it. It requires macOS 14 or later (the Control Center control needs
-macOS 26) and is universal: Apple silicon and Intel. This build is 1.0 (5); it replaces the previous 1.0 assets.
+macOS 26) and is universal: Apple silicon and Intel. This build is 1.0 (6); it replaces the previous 1.0 assets.
 
 ### Install
 
@@ -34,12 +34,12 @@ The app is ad-hoc signed (not notarized), and Homebrew keeps the download quaran
 approve the first launch in **System Settings → Privacy & Security → Open Anyway**. The
 dashboard opens on first launch, and the country flag is in the menu bar.
 
-Build 3 resolved the observed pre-startup stall through a fresh verified release and normal
-macOS approval, with quarantine retained. Builds 4 and 5 preserve that behavior. After approval,
-verify readiness with:
+Build 3 passed normal approval with quarantine retained, but build 5 reproduced the pre-startup
+stall after a Homebrew reinstall. Build 6 captures the pending approval/authentication sequence
+externally; it does not claim to fix the stall. Start capture before approval with:
 
 ```sh
-/bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/diagnose-launch.sh --launch --timeout 60
+/bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/diagnose-launch.sh --trace --launch --timeout 180
 ```
 
 Without Homebrew, double-click `ExitIPMonitor-1.0.pkg` (approve it once with **Open
@@ -80,6 +80,16 @@ Anyway**), or run
   so simultaneous launch attempts cannot overwrite each other's diagnostics.
 
 ### Installation diagnostics
+
+- Build 6 adds `--trace`: bounded information-level Gatekeeper/authentication capture before
+  launch, even if the app never reaches its entry point. Reports retain default system
+  privacy redaction and stay local; no Keychain or proxy configuration is collected.
+- Summaries include version/build, verification status, startup records, observed authentication
+  messages and missing-evidence notices. A missing heartbeat cannot report success.
+- Collectors stop on success, timeout, launch failure and cancellation. Explicit output
+  directories must be new or empty to prevent old evidence contaminating a new result.
+- README records the recurring build 5 failure and distinguishes observed authentication
+  errors from an established root cause. Reopening and reinstalling are separate manual checks.
 
 - Installers require a fresh main-thread readiness response from the installed build; a PID
   blocked before startup no longer reports success.

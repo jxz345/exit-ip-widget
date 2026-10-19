@@ -44,7 +44,7 @@ If the Clash Verge profile and provider sections disappear after a reinstall, se
 | Turn the daemon off (stays off across reinstalls) | `sudo /bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/daemon.sh remove` |
 | Turn it back on | `sudo /bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/daemon.sh install` |
 
-v1.0 was rebuilt as 1.0 (5), adding direct menu-bar access to a regular dashboard window, dashboard-controlled Dock visibility, consistent controls, and resize-safe profile editing. It retains build 4's provider installation and single-instance protection and build 3's launch diagnostics. Homebrew doesn't offer a rebuild with the same version as an upgrade, so a Mac with an earlier 1.0 build needs the reinstall command above. It removes the cached download first; otherwise Homebrew reports a SHA-256 mismatch.
+v1.0 was rebuilt as 1.0 (6), adding external launch tracing for intermittent macOS approval stalls. It retains build 5's dashboard improvements, build 4's provider installation and single-instance protection, and build 3's readiness checks. Homebrew doesn't offer a rebuild with the same version as an upgrade, so a Mac with an earlier 1.0 build needs the reinstall command above. It removes the cached download first; otherwise Homebrew reports a SHA-256 mismatch.
 
 Build 5 layout references use off-screen renders of the actual SwiftUI dashboard with sample data:
 [wide/light](Previews/05-dashboard-wide-light.png), [minimum-size/dark](Previews/06-dashboard-narrow-dark.png),
@@ -71,16 +71,27 @@ Do not delete security databases or disable Gatekeeper to diagnose this problem.
 ### Launch diagnostics
 
 The installer checks a live response from the app's main thread, its bundle path, PID,
-version, and build (including a macOS App Translocation copy with the same verified signature). Merely appearing in Activity Monitor is not success. To launch and verify:
+version, and build (including a macOS App Translocation copy with the same verified signature). Merely appearing in Activity Monitor is not success. To trace approval and verify launch:
 
 ```sh
-/bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/diagnose-launch.sh --launch --timeout 60
+/bin/bash /Applications/ExitIPMonitor.app/Contents/Resources/diagnose-launch.sh --trace --launch --timeout 180
 ```
 
 Omit `--launch` to inspect the existing process without opening another copy. From a source
 checkout use `bash Scripts/check-launch.sh`. `--app PATH` selects another bundle and
-`--output DIR` selects a diagnostic directory. A successful check exits 0; a failed signature
-or missing/stale readiness response exits 1; invalid arguments exit 2.
+`--output DIR` selects a new or empty diagnostic directory (an existing report is rejected). A successful check exits 0; a failed signature
+or missing/stale readiness response exits 1; invalid arguments exit 2. Cancellation exits 130 (Ctrl-C) or 143 (termination).
+
+Build 6's `--trace` starts an external information-level security log collector **before**
+requesting launch. It works through `/bin/bash` even when application code never runs.
+`security-stream.txt` and `security-history.txt` contain Gatekeeper and authentication-service
+messages within the capture window, including approval results without the app name.
+`identity.txt` records both architectures' code identities; `summary.txt` distinguishes
+verified readiness, pre-entry blockage, startup without readiness, and inconclusive failure.
+`incomplete.txt` identifies unavailable or truncated evidence, including permission errors.
+Collectors stop on success, failure, timeout, or cancellation; collection commands have deadlines
+and trace log files have size limits. Without `--trace`, the normal readiness check remains available.
+The 180-second wait allows time for manual approval; it is not a claim that approval will succeed.
 
 Each check prints its progress and local output directory under
 `~/Library/Application Support/ExitIPMonitor/Logs/launch-check-*`. On failure it saves bounded
@@ -92,12 +103,12 @@ record every two seconds; a record more than eight seconds old is rejected.
 The release installer saves `install-*` in the same Logs folder. Root daemon setup saves
 `/Library/Logs/ExitIPMonitor/daemon-install-*` and removal saves `daemon-remove-*`.
 Step logs include UTC time, duration, timeout and exit status. These diagnostics stay local;
-they exclude Keychain values and proxy configuration. Review paths before sharing them.
+they exclude Keychain values and proxy configuration. Trace reports retain Apple's default privacy redaction but may include unrelated authentication events within the short capture window. Review their contents and local paths before sharing them.
 The launch checker never changes quarantine, signatures, or system security settings.
 
 If macOS says the app **is damaged and can't be opened**, the copy predates the current release and has only a partial signature. Install the current release.
 
-### Successful installation fix: v1.0, build 3
+### Installation history: successful build 3 and recurring build 5 stall
 
 Verified on **2026-10-19**: replacing the stalled build 1.0 (2) with the GitHub-built
 **1.0 (3)** resolved the observed launch failure. The published ZIP passed checksum and
@@ -117,8 +128,19 @@ A fresh build with the same signing policy, both architectures and the widget ex
 passed normal **Open Anyway** approval with quarantine retained. The app reached readiness
 and completed an IP lookup. The checker also handles App Translocation after validating
 that the running copy has the installed app's code identity and a valid sealed bundle.
-A fresh build identity replaces the stuck build; diagnostics expose any future recurrence
-instead of reporting a suspended process as a successful launch.
+The successful fresh build did not establish the cause of the earlier stall. Diagnostics
+expose a recurrence instead of reporting a suspended process as a successful launch.
+
+On **2026-10-19**, build **1.0 (5)** also ran successfully from `/Applications`, then stalled
+following a Homebrew uninstall/install and **Open Anyway** with administrator-password
+approval. Its installed files matched the release ZIP and passed signature verification.
+The process again had a 96 KB footprint at `_dyld_start + 0`, with no startup heartbeat.
+Expanded information-level logs showed **Allow Override**, **Waiting for user override
+authentication**, and `coreauthd` reporting **Unable to get the SessionAgent endpoint**;
+no completion appeared in the captured interval. This locates a pending authentication
+handoff but does not prove the endpoint error caused the stall. Signing, packaging, and
+the launch-check scripts were unchanged between builds 3 and 5. Build 6 adds external tracing;
+it does not claim a fix. Successful reopening and another reinstall must be checked separately.
 
 The implementation follows Sleepless's ad-hoc signing, normal macOS approval, and Homebrew
 postflight service-installation approach. The fix also replaces the old `pgrep` success check
@@ -182,7 +204,7 @@ The implementation follows Apple’s Liquid Glass guidance for macOS 26+ without
 | **Dashboard window** | The persistent menu-bar flag opens the single retained dashboard directly. A normal titled, resizable primary window participates in Mission Control, App Exposé, Cmd-Tab, full screen, and window cycling. The Dock icon remains while the dashboard is open or minimized and disappears when it closes, even if Settings or Event Log remain open; monitoring continues. Reopening brings the same window onto the active desktop, restores its remembered frame, and repeats focus after the Dock transition; disconnected displays are handled. Default size is 1000 × 860, clamped to the display. Two columns become one below 960 points, preserving unsaved profile edits; content scrolls and the footer stays available. The left column contains current exit IP, country, location, network, timezone, update time/age, source, the allowlist, and the Clash Verge profile editor. The right contains Monitoring, provider setup/status, and Apply in Clash Verge. Profile fields use full-width label/value rows. Buttons use consistent native regular sizing, minimum widths, and equal widths for paired actions; icon-only removal controls have accessible labels and tooltips. File/URL rows show a single truncated value with its full tooltip and aligned actions beneath. Monitoring shows schedule, highlights, provider order/health/daily budgets, login control, Edit in Settings, and Event Log. Event Log shows the last 500 important UTC-stamped events, updates live, and offers Copy All and Show Log Files. Missing Clash Verge has an installation note; installed Clash Verge has an Open action and import steps. Stale data, country changes, and errors remain visible, with Refresh now, Dismiss, Turn Off Highlights, and Clear error actions. The footer offers Settings, Clear indicators, Quit Exit IP, and monitoring status. |
 | **Menu-bar interaction** | The status item remains present with or without windows and updates its flag/name, error symbol, stale marker, and country-change highlight. Clicking opens the dashboard without a popup. Standard app menus provide Settings (Cmd-,), Close Window (Cmd-W), Dashboard (Cmd-1), Minimize (Cmd-M), editing commands, and Quit (Cmd-Q). |
 | **Dashboard daemon installation** | Missing or incomplete provider setup is visible, with **Install Provider** or **Retry Installation**. Native macOS authentication runs the bundled installer, off the main thread. Both services must be loaded before success. Cancellation, errors, expandable output, and a local log link remain visible. Profile editing and import instructions remain available throughout; no app restart is needed after setup. |
-| **Installation diagnostics** | Checksum and strict signature verification, timestamped installer and daemon logs, main-thread launch readiness with PID/path/build validation, bounded command execution, and local app-specific security logs and process samples. Normal Gatekeeper approval is retained. |
+| **Installation diagnostics** | Checksum and strict signature verification, timestamped installer and daemon logs, main-thread launch readiness with PID/path/build validation, bounded command execution, and process samples. Optional external `--trace` starts before launch and records Gatekeeper/authentication decisions at information level, code identities, startup records, a concise result summary and incomplete-evidence notices; collectors stop on every exit path. Normal Gatekeeper approval is retained. |
 | **Settings window** | Opened from the app menu (Cmd-,) or the **Settings** button in the dashboard; a retained AppKit window (like the dashboard) so it reliably comes to the front, at about 560 × 700 on the screen with the pointer (smaller screens get a window that fits). Sections: **Menu bar** display style, **Change attention** highlights, **Startup** (Launch at login + Open Login Items Settings), **Refresh** frequency, **IP location service** (provider pool, per-provider health and a **Test** action that checks exactly that provider—skipped, not redirected, while it is paused or out of daily budget, IPinfo Lite token in Keychain; without a token IPinfo Lite is skipped and its health line says so), and **Diagnostics** (clear indicators, redacted logs with configurable retention). Debug builds also expose in-memory failure simulations for manual QA. |
 | **Exit-IP allowlist warning** | The dashboard holds exact IPv4/IPv6 addresses you expect to exit from (empty list = no warnings). When a fresh, successful lookup returns an address outside the list, an **Exit IP Not Allowed** warning window opens once per address, and the dashboard show an orange **Exit IP not on the allowlist** notice. The app **only warns**: it never blocks or changes networking, and the menu bar keeps showing the country. Failed lookups never warn. See [allowlist details](#exit-ip-allowlist-warning). |
 | **Tailscale → Clash Verge provider (root daemon)** | For Clash Verge Rev (Mihomo) next to the native Tailscale client: keeps one proxy-provider member, `TS-NATIVE`, bound to the current, verified Tailscale `utunN` and serves it at `http://127.0.0.1:18766/provider.yaml`, so a reconnect that renumbers the tunnel needs no profile reload. **Homebrew installs and starts it on every Mac** (cask postflight, one password prompt), Sleepless-style; `sudo /bin/bash …/daemon.sh install` does the same by hand. Install stops whatever else holds the port (a launchd job is disabled so it stays off). A Mac without Tailscale or Clash Verge Rev gets it too: install prints which app is missing, the provider serves Reject with a [plain-language reason](#reasons) (**Reject · Tailscale isn't installed**), and the dashboard's **Clash Verge** row says when nothing uses the provider. A **removal grant** in `/etc/sudoers.d/` lets `brew uninstall` remove the daemon without a password; it allows only unloading the two jobs, restarting the monitor, and deleting the daemon's files and the grant. `daemon.sh remove` turns the daemon off and leaves a marker in your Library so Homebrew reinstalls keep it off. A root monitor checks the route to `100.100.100.100`, the Tailscale CLI's address (run as the console user), and interface ownership every 2 seconds and writes `provider.yaml`. A launchd-held loopback socket serves that file as `nobody`, closes stalled or incomplete HTTP requests without a response, and serves Reject whenever Tailscale can't be verified or the last check is more than 12 seconds old. The dashboard shows its status in plain words, the file's location (**Open File**, **Show in Finder**), the address it is served at (**Open in Browser**), and whether Clash Verge Rev is installed (**Open**). The dashboard's **Clash Verge profile** group takes your proxy (server, port, username, password; kept in the Keychain). The app writes a complete Clash Verge profile with it, including the provider, to `~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml` (0600; never committed or logged; no installer writes it). It shows the file's location (**Open File**, **Show in Finder**) and how to import it into Clash Verge as its one Local profile. See [Tailscale → Clash Verge provider](#tailscale--clash-verge-provider-root-daemon). |
@@ -789,7 +811,7 @@ bash Scripts/check-signed-build.sh
 
 The default generator build uses no signing identity (it is ad-hoc signed afterwards, with the app unsandboxed), so it is useful as a **local compilation and menu-bar-app test**. You can keep a local copy in `~/Applications` through Finder or by copying the complete `.app` bundle; do not copy only the inner `Contents/MacOS/ExitIPMonitor` executable because it depends on the bundle’s `Info.plist`, embedded widget extension, and resources.
 
-The running app writes JSON-lines diagnostics to `~/Library/Application Support/ExitIPMonitor/Logs` (one `runtime-<launch time>-<pid>.jsonl` file per launch, so simultaneous launch attempts do not overwrite each other's logs). Set `EXIT_IP_LOG_DIRECTORY` before launching to write runtime logs somewhere else during development; it does not change the instance lock. Useful events when checking behavior against this README:
+The running app writes JSON-lines diagnostics to `~/Library/Application Support/ExitIPMonitor/Logs` (one `runtime-<launch time>-<pid>.jsonl` file per launch, so simultaneous launch attempts do not overwrite each other's logs). Set `EXIT_IP_LOG_DIRECTORY` before launching to write runtime logs somewhere else during development; it does not change the instance lock. Before `process_entered`, the app cannot emit runtime events: use the external launch checker's `summary.txt`, security trace and process sample. Its reports are separate from the runtime event stream. Useful events when checking behavior against this README:
 
 | Event | Meaning |
 | --- | --- |
@@ -956,6 +978,7 @@ Changing a gateway, route, interface, system proxy, or enabling/disabling a TUN/
 | First launch | Menu label changes from `Locating` to the selected country display after an immediate check. Dashboard shows public IP, provider data, absolute **Last updated** time, and relative age. |
 | Menu settings | Switching among name, country code, flag, and flag+name immediately changes the menu-bar item; a stale result is labeled after twice the selected interval. |
 | Open Settings | The dashboard Settings button and app-menu Cmd-, open or restore the full Settings window. Closing Settings leaves the dashboard and its Dock icon intact, including when the dashboard is minimized. Closing the dashboard hides the Dock icon even if Settings or Event Log remain open. No settings window opens automatically. |
+| External launch trace | Run `diagnose-launch.sh --trace --launch --timeout 180` before approval. Success requires a fresh matching heartbeat and `result=ready`; a pre-entry stall yields `result=blocked_before_entry` only with process-sample evidence. Confirm authentication messages without the app name are captured, missing permissions appear in `incomplete.txt`, and Ctrl-C or timeout leaves no collector running. Repeat opening and a Homebrew reinstall with the cached ZIP cleared; one successful launch is not a permanent-fix claim. |
 | Open Dashboard | Click the persistent menu-bar flag: the dashboard opens directly with a Dock icon and Cmd-Tab entry. Verify Mission Control/App Exposé and full screen. Minimize and click the flag to restore; repeated clicks keep one window/process. Move/resize, close/reopen, and restart: the frame is preserved. Disconnect its display: the title bar stays reachable. Closing hides the Dock icon, keeps the flag, and leaves lookup and provider services running. |
 | Dashboard layout and editing | Check light/dark appearances at 1000 × 860 and 520 × 380. Buttons have consistent heights and paired widths, fields stay usable, long text wraps, paths truncate with full tooltips, and the footer remains available. Enter unsaved proxy values, resize across 960 points repeatedly, and confirm values/focus survive without Save. Check missing/installed/installing/failed provider states, keyboard focus, and accessible names on removal and profile fields. |
 | Manual refresh | Selecting **Refresh now** in the dashboard fetches the current public IP at once. Pressing it again within five seconds uses the next pool provider (`provider_rotated_spacing`); only with a single-provider pool does it display the queued time and run at the five-second boundary. |
