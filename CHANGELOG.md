@@ -6,19 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Use the section for a version as that release's notes.
 
-## [Unreleased]
-
-### App
-
-- The provider section no longer shows **Installation details** or **Show Installation Log**.
-  The setup output is still saved to `~/Library/Application Support/ExitIPMonitor/Logs/daemon-setup-*.log`.
-
 ## [2.0] - 2026-10-20
 
-Version **2.0 (build 9)**, a new `v2.0` release built and tested on this Mac without GitHub
-Actions; v1.0 stays published as the rollback. Upgrade with
+Version **2.0 (build 10)**, built and tested on this Mac without GitHub Actions; v1.0 stays
+published as the rollback. Upgrade from 1.0 with
 `brew upgrade --cask jxz345/tap/exit-ip-monitor`. It asks for your password once, for the
-provider.
+provider. Build 10 replaced the first 2.0 upload (build 9) in place. A Mac that already has
+build 9 needs `rm -f "$(brew --cache --cask jxz345/tap/exit-ip-monitor)" && brew update &&
+brew reinstall --cask jxz345/tap/exit-ip-monitor`, because a same-version rebuild isn't an
+upgrade.
 
 ### Install
 
@@ -55,6 +51,8 @@ provider.
   dashboard has one **Open Clash Verge** button, in Apply in Clash Verge; the provider's
   Clash Verge row shows only whether it is installed.
 - `diagnose-launch.sh` adds the lock/unlock hint to a blocked-before-entry error.
+- Build 10: The provider section no longer shows **Installation details** or **Show Installation Log**.
+  The setup output is still saved to `~/Library/Application Support/ExitIPMonitor/Logs/daemon-setup-*.log`.
 
 ### Docs
 
