@@ -7,7 +7,20 @@ struct MenuBarCountryLabel: View {
     let displayStyle: MenuBarDisplayStyle
     let refreshInterval: RefreshInterval
     let indicators: MonitorIndicatorState
+    /// The verified exit IP is outside the allowlist (warn-only).
+    let outsideAllowlist: Bool
     let date: Date
+
+    /// A red stop sign beside the location. After a failed lookup the error stop sign replaces the
+    /// flag instead, so this one is not added.
+    var showsAllowlistStop: Bool { outsideAllowlist && !indicators.suppressLocation }
+
+    /// The red stop sign shown while the exit IP is outside the allowlist; the Dock icon shows it alone.
+    static var allowlistStop: some View {
+        Image(systemName: ExitIPIndicatorSymbol.outsideAllowlist)
+            .foregroundStyle(.red)
+            .accessibilityLabel("Not on the allowlist")
+    }
 
     var body: some View {
         let isChanged = !indicators.suppressLocation && (snapshot?.isCountryChangeHighlighted(at: date) ?? false)
@@ -23,6 +36,9 @@ struct MenuBarCountryLabel: View {
                 Text(statusLabel(at: date))
                     .lineLimit(1)
                     .fontWeight(isChanged ? .bold : .regular)
+            }
+            if showsAllowlistStop {
+                Self.allowlistStop
             }
             if isChanged {
                 Image(systemName: "circle.fill")
@@ -42,17 +58,18 @@ struct MenuBarCountryLabel: View {
     var visualKey: String {
         let isChanged = !indicators.suppressLocation && (snapshot?.isCountryChangeHighlighted(at: date) ?? false)
         return [displayStyle.rawValue, indicators.suppressLocation ? "error" : statusLabel(at: date),
-                isChanged ? "changed" : "-"].joined(separator: "|")
+                isChanged ? "changed" : "-", showsAllowlistStop ? "outside" : "-"].joined(separator: "|")
     }
 
     func accessibilityText(at date: Date) -> String {
         if indicators.suppressLocation { return "Exit IP error" }
-        guard let snapshot else { return "Exit IP location unavailable" }
+        let allowlist = showsAllowlistStop ? ", not on the allowlist" : ""
+        guard let snapshot else { return "Exit IP location unavailable" + allowlist }
         let stale = snapshot.isStale(at: date, threshold: Double(refreshInterval.rawValue * 2))
         if snapshot.isCountryChangeHighlighted(at: date) {
-            return "Exit IP country changed from \(snapshot.countryChange?.previousName ?? "previous location") to \(snapshot.countryName)" + (stale ? ", data is stale" : "")
+            return "Exit IP country changed from \(snapshot.countryChange?.previousName ?? "previous location") to \(snapshot.countryName)" + allowlist + (stale ? ", data is stale" : "")
         }
-        return "Exit IP country: \(snapshot.countryName)" + (stale ? ", data is stale" : "")
+        return "Exit IP country: \(snapshot.countryName)" + allowlist + (stale ? ", data is stale" : "")
     }
 
     private func statusLabel(at date: Date) -> String {

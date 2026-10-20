@@ -125,6 +125,8 @@ final class EventLogLineTests: XCTestCase {
     func testStopSymbolIsAValidSFSymbol() {
         XCTAssertEqual(ExitIPIndicatorSymbol.lookupError, "xmark.octagon.fill")
         XCTAssertNotEqual(ExitIPIndicatorSymbol.lookupError, ExitIPIndicatorSymbol.countryChanged)
+        // The allowlist mismatch uses the same stop sign, drawn red.
+        XCTAssertEqual(ExitIPIndicatorSymbol.outsideAllowlist, ExitIPIndicatorSymbol.lookupError)
         #if canImport(AppKit)
         XCTAssertNotNil(NSImage(systemSymbolName: ExitIPIndicatorSymbol.lookupError, accessibilityDescription: nil))
         XCTAssertNotNil(NSImage(systemSymbolName: ExitIPIndicatorSymbol.countryChanged, accessibilityDescription: nil))

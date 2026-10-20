@@ -44,7 +44,9 @@ final class StatusItemController: NSObject {
         let label = MenuBarCountryLabel(snapshot: monitor.snapshot,
                                         displayStyle: monitor.preferences.menuBarDisplayStyle,
                                         refreshInterval: monitor.preferences.refreshInterval,
-                                        indicators: monitor.indicators, date: monitor.displayDate)
+                                        indicators: monitor.indicators,
+                                        outsideAllowlist: monitor.authorizationState.isNotAllowed,
+                                        date: monitor.displayDate)
         let host = hostingView ?? StatusLabelHostingView(rootView: label)
         host.rootView = label
         if hostingView == nil {

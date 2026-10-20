@@ -4,8 +4,10 @@ import SwiftUI
 /// Mirrors the menu-bar icon in the Dock and ⌘-Tab. `StatusItemController` passes the same
 /// `MenuBarCountryLabel` it has just drawn, with the status button's appearance, so the Dock shows
 /// exactly what the menu bar shows (flag or chosen text style, stale prefix, stop symbol, change
-/// highlight) and changes at the same moment. The label is rendered at high resolution, scaled to
-/// fit a transparent square canvas, and drawn only when its visible content changes.
+/// highlight) and changes at the same moment. One exception: while the exit IP is outside the
+/// allowlist, the menu bar adds a red stop sign beside the flag and the Dock shows only that red
+/// stop sign. The content is rendered at high resolution, scaled to fit a transparent square
+/// canvas, and drawn only when its visible content changes.
 @MainActor
 final class DockIconController {
     static let shared = DockIconController()
@@ -20,9 +22,14 @@ final class DockIconController {
     /// content or appearance changed. Returns whether a new icon was rendered.
     @discardableResult
     func update(label: MenuBarCountryLabel, darkAppearance: Bool, apply: Bool = true) -> Bool {
-        let key = label.visualKey + (darkAppearance ? "|dark" : "|light")
+        // Outside the allowlist the Dock shows only the red stop sign, so the flag, style and stale
+        // prefix don't change it.
+        let key = (label.showsAllowlistStop ? "allowlist-stop" : label.visualKey) + (darkAppearance ? "|dark" : "|light")
         guard key != lastKey else { return false }
-        guard let rendered = Self.render(label: label, darkAppearance: darkAppearance) else {
+        let rendered = label.showsAllowlistStop
+            ? Self.render(MenuBarCountryLabel.allowlistStop, darkAppearance: darkAppearance)
+            : Self.render(label, darkAppearance: darkAppearance)
+        guard let rendered else {
             RuntimeLog.shared.error("dock_icon_render_failed")
             return false
         }
@@ -40,8 +47,8 @@ final class DockIconController {
         if let image { NSApp.applicationIconImage = image }
     }
 
-    static func render(label: MenuBarCountryLabel, darkAppearance: Bool) -> NSImage? {
-        let content = label
+    static func render<Content: View>(_ view: Content, darkAppearance: Bool) -> NSImage? {
+        let content = view
             .fixedSize()
             .environment(\.colorScheme, darkAppearance ? .dark : .light)
         // Measure at 1×, then render again at the scale that fills the canvas, so the emoji and

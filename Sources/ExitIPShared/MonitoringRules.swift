@@ -24,6 +24,9 @@ extension RefreshInterval {
 public enum ExitIPIndicatorSymbol {
     /// A failed exit-IP lookup (the location is hidden): a stop sign in place of the country flag.
     public static let lookupError = "xmark.octagon.fill"
+    /// A verified exit IP outside the allowlist (app only): the same stop sign in red, beside the flag
+    /// in the menu bar and alone in the Dock icon. The location stays visible.
+    public static let outsideAllowlist = "xmark.octagon.fill"
     /// A confirmed country change (Control Center only; elsewhere the yellow highlight shows it).
     public static let countryChanged = "exclamationmark.triangle.fill"
 }

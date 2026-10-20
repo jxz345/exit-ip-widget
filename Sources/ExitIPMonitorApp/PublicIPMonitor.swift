@@ -32,6 +32,11 @@ final class PublicIPMonitor: ObservableObject {
         case unavailable
         case allowed
         case notAllowed(String)
+
+        var isNotAllowed: Bool {
+            if case .notAllowed = self { return true }
+            return false
+        }
     }
 
     /// Why a refresh was requested; written to the runtime log so event-driven behavior can be audited.

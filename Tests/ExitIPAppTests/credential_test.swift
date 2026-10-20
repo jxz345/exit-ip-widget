@@ -130,11 +130,11 @@ enum CredentialAppTests {
         let stale = ExitIPSnapshot(ipAddress: "192.0.2.10", countryCode: "SG", countryName: "Singapore",
                                    provider: .ipWhois, checkedAt: now.addingTimeInterval(-7_200))
         func label(_ snapshot: ExitIPSnapshot?, _ style: MenuBarDisplayStyle = .flag,
-                   error: Bool = false) -> MenuBarCountryLabel {
+                   error: Bool = false, outside: Bool = false) -> MenuBarCountryLabel {
             MenuBarCountryLabel(snapshot: snapshot, displayStyle: style, refreshInterval: .fifteenMinutes,
                                 indicators: MonitorIndicatorState(errorMessage: error ? "Lookup failed" : nil,
                                                                   suppressLocation: error),
-                                date: now)
+                                outsideAllowlist: outside, date: now)
         }
         let dock = DockIconController()
         let states: [(String, MenuBarCountryLabel, Bool)] = [
@@ -142,6 +142,8 @@ enum CredentialAppTests {
             ("changed", label(changed), true), ("error", label(singapore, error: true), true),
             ("stale", label(stale), true), ("locating", label(nil), true),
             ("code", label(singapore, .code), true), ("name-dark", label(singapore, .name), false),
+            ("outside-allowlist", label(singapore, outside: true), true),
+            ("outside-allowlist-name-dark", label(singapore, .name, outside: true), false),
         ]
         for (name, menuBar, light) in states {
             require(dock.update(label: menuBar, darkAppearance: !light, apply: false), "\(name) must render a new icon")
@@ -167,6 +169,36 @@ enum CredentialAppTests {
         require(dock.update(label: label(singapore), darkAppearance: true, apply: false),
                 "A menu-bar appearance change must re-render")
         print("PASS: the Dock icon re-renders the menu-bar label only when its flag, error, change, stale, style or appearance changes")
+
+        // Outside the allowlist: the menu bar keeps the flag and adds a red stop sign; the Dock shows
+        // only the red stop sign.
+        func width(_ view: MenuBarCountryLabel) -> Int { ImageRenderer(content: view.fixedSize()).cgImage?.width ?? 0 }
+        require(width(label(singapore, outside: true)) > width(label(singapore)),
+                "Outside the allowlist the menu bar must show the flag and the stop sign")
+        require(label(singapore, outside: true).accessibilityText(at: now) == "Exit IP country: Singapore, not on the allowlist",
+                "The menu-bar label must say the exit IP is not on the allowlist")
+        require(label(singapore, error: true, outside: true).visualKey == label(singapore, error: true).visualKey,
+                "After a failed lookup the error stop sign replaces the flag, without the red one")
+        require(dock.update(label: label(singapore, outside: true), darkAppearance: false, apply: false),
+                "Leaving the allowlist must re-render the Dock icon")
+        require(!dock.update(label: label(japan, .name, outside: true), darkAppearance: false, apply: false),
+                "Outside the allowlist, a flag or style change must not re-render the Dock icon")
+        guard let stopImage = dock.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            fatalError("No Dock icon outside the allowlist")
+        }
+        let stop = NSBitmapImageRep(cgImage: stopImage)
+        var opaque = 0, red = 0
+        for x in stride(from: 0, to: 512, by: 8) {
+            for y in stride(from: 0, to: 512, by: 8) {
+                guard let color = stop.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), color.alphaComponent > 0.5 else { continue }
+                opaque += 1
+                if color.redComponent > 0.7 && color.greenComponent < 0.4 && color.blueComponent < 0.4 { red += 1 }
+            }
+        }
+        require(opaque > 40 && red * 10 >= opaque * 9, "The Dock icon must be the red stop sign alone (\(red) of \(opaque) red)")
+        require(dock.update(label: label(singapore), darkAppearance: false, apply: false),
+                "Returning to the allowlist must restore the menu-bar label in the Dock")
+        print("PASS: outside the allowlist the menu bar adds a red stop sign beside the flag and the Dock shows only the red stop sign")
     }
 
     static func snapshot(_ provider: ProviderID) -> ExitIPSnapshot {
