@@ -23,13 +23,15 @@ bash Scripts/generate-xcode-project.sh --force --open
 xcodebuild -project XcodeProject/ExitIPMonitor.xcodeproj -scheme ExitIPMonitor -destination 'platform=macOS' build
 open XcodeProject/DerivedData/Build/Products/Debug/ExitIPMonitor.app
 
-# Release: add a CHANGELOG.md section, then push the tag; .github/workflows/release.yml builds,
-# attests, and publishes on a clean runner. Then update the cask in jxz345/homebrew-tap.
-git tag v1.0 && git push origin v1.0
-bash Scripts/package-release.sh   # local test build into dist/ only
+# Release (built on this Mac; no workflow): bump MARKETING_VERSION/CURRENT_PROJECT_VERSION in
+# Scripts/generate-xcode-project.sh, add a CHANGELOG.md section, build, run the install matrix
+# (README "Maintainer notes"), then tag, `gh release create v<version> dist/...`, update the tap.
+bash Scripts/package-release.sh   # writes dist/ExitIPMonitor-<version>.{zip,pkg}, install.sh, SHA256SUMS
+EXIT_IP_CASK_PATH=/opt/homebrew/Library/Taps/jxz345/homebrew-tap/Casks/exit-ip-monitor.rb bash Tests/ExitIPInstallTests/run.sh
+bash Tests/ExitIPAppTests/run.sh  # compiles the real app sources: credentials and Dock icon checks
 ```
 
-- Never publish release files built on this Mac. Files written here can carry this Mac's `com.apple.provenance` stamp, which the kernel won't let `xattr` remove. The stamp travels in the zip/pkg, but it did not cause the pre-startup launch stall. That was macOS parking its own Open Anyway approval when Use Password was chosen while loginwindow's background Touch ID request ran. Lock and unlock the screen (or restart) to release it; the cask avoids it by removing quarantine after `codesign --verify` (README "First launch"). Check that log signature first. `package-release.sh` warns locally and fails in CI when a file carries extended attributes.
+- Releases are built and published from this Mac with `Scripts/package-release.sh` (the user's choice since 2.0; the GitHub workflow was removed). The ZIP must have no AppleDouble entries. Files written here carry a `com.apple.provenance` stamp that `xattr` can't remove; it is harmless and did not cause the pre-startup launch stall. That stall was macOS parking its own Open Anyway approval when Use Password was chosen while loginwindow's background Touch ID request ran (lock and unlock the screen, or restart, to release it). The cask avoids it by removing quarantine after `codesign --verify`. **Read README "Maintainer notes (for the next coding session)" before touching the cask, installers, or launch behavior**: it has the log signature, the install matrix to run before any tap push, and the guardrails: keep the preflight byte-identical, never replace an older version's published assets, and revert the tap to roll back.
 - When a SwiftPM build fails, the first `error:` line in `swift-test.log` is the actionable one; trailing `error: Build failed` is just a summary.
 - App/widget targets need full Xcode with the macOS 26 SDK; they are not in `Package.swift`. Deployment target is macOS 14; `ExitIPControl` is `@available(macOS 26.0, *)`.
 - No linter/formatter is configured.

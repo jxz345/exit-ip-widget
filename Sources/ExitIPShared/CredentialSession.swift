@@ -42,7 +42,8 @@ public final class CredentialService: Sendable {
 }
 
 /// In-memory state for one account. Construction and inspection never access storage.
-/// Only explicit load/save/remove calls perform I/O; failed operations preserve the last value.
+/// Only load/save/remove calls perform I/O, plus `loadIfNotLoaded`, the dashboard's one automatic
+/// read per session. Failed operations preserve the last value.
 @MainActor
 @Observable
 public final class CredentialSession {
@@ -80,6 +81,14 @@ public final class CredentialSession {
     @discardableResult
     public func load() async -> Bool {
         await perform(.load) { try await self.service.read(account: self.account) }
+    }
+
+    /// Reads only while nothing has been loaded this session: at most one automatic read, never
+    /// overlapping an operation in progress and never retrying a failure (explicit `load` does).
+    @discardableResult
+    public func loadIfNotLoaded() async -> Bool {
+        guard state == .notLoaded else { return state == .available || state == .missing }
+        return await load()
     }
 
     @discardableResult

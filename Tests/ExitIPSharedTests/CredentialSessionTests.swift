@@ -151,6 +151,52 @@ final class CredentialSessionTests: XCTestCase {
         XCTAssertTrue(events.allSatisfy { $0.2 >= 0 })
     }
 
+    func testAutomaticLoadReadsOncePerSessionAndNeverRetriesAFailure() async {
+        let backend = TestCredentialBackend(value: "stored-profile")
+        let session = makeSession(backend)
+        let first = await session.loadIfNotLoaded()
+        let second = await session.loadIfNotLoaded()
+        XCTAssertTrue(first)
+        XCTAssertTrue(second)
+        XCTAssertEqual(session.value, "stored-profile")
+        XCTAssertEqual(backend.operations, ["read"])
+        // An explicit Load still reads again.
+        await session.load()
+        XCTAssertEqual(backend.operations, ["read", "read"])
+
+        let missingBackend = TestCredentialBackend(value: nil)
+        let missing = makeSession(missingBackend)
+        await missing.loadIfNotLoaded()
+        let missingAgain = await missing.loadIfNotLoaded()
+        XCTAssertTrue(missingAgain)
+        XCTAssertEqual(missing.state, .missing)
+        XCTAssertEqual(missingBackend.operations, ["read"])
+
+        let failingBackend = TestCredentialBackend(value: "stored-profile")
+        failingBackend.shouldFail = true
+        let failing = makeSession(failingBackend)
+        let failed = await failing.loadIfNotLoaded()
+        let notRetried = await failing.loadIfNotLoaded()
+        XCTAssertFalse(failed)
+        XCTAssertFalse(notRetried)
+        XCTAssertEqual(failing.state, .failed)
+        XCTAssertEqual(failingBackend.operations, ["read"])
+    }
+
+    func testAutomaticLoadDoesNotOverlapAnOperationInProgress() async throws {
+        let backend = TestCredentialBackend(value: "stored-profile", blockRead: true)
+        let session = makeSession(backend)
+        let pending = Task { await session.load() }
+        let deadline = Date().addingTimeInterval(2)
+        while !session.isBusy, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        let overlapping = await session.loadIfNotLoaded()
+        XCTAssertFalse(overlapping)
+        backend.releaseRead()
+        _ = await pending.value
+        XCTAssertEqual(backend.operations, ["read"])
+        XCTAssertEqual(session.state, .available)
+    }
+
     private func makeSession(_ backend: TestCredentialBackend) -> CredentialSession {
         CredentialSession(service: CredentialService(backend: backend), account: "test")
     }

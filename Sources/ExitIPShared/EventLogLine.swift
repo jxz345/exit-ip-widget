@@ -75,6 +75,15 @@ public enum EventLogLine {
         case "route_monitor_unavailable", "network_configuration_monitor_unavailable":
             return "Network change monitor unavailable"
         case "ipinfo_token_removed": return "IPinfo token removed"
+        case "login_item_synced":
+            if fields["result"] == "failed" {
+                return "Launch at login couldn't be restored" + detail(fields["error"])
+            }
+            switch fields["action"] {
+            case "register": return "Launch at login restored"
+            case "unregister": return "Launch at login turned off, as chosen"
+            default: return nil
+            }
         default: return nil
         }
     }

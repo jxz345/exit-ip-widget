@@ -31,4 +31,6 @@ public enum ExitIPPreferenceKey {
     public static let diagnostics = "exit-ip.diagnostics.v1"
     /// Set once the dashboard has been shown on the app's first launch.
     public static let firstLaunchDashboardShown = "exit-ip.first-launch-dashboard-shown.v1"
+    /// The user's Launch at login choice (absent: never chosen). Re-applied at every launch.
+    public static let launchAtLogin = "exit-ip.launch-at-login.v1"
 }

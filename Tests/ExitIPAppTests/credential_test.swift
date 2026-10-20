@@ -43,9 +43,14 @@ enum CredentialAppTests {
                        to: output.appendingPathComponent("settings-\(mode).png"))
         }
         try await settle()
-        require(backend.calls.isEmpty && profileBackend.calls.isEmpty, "Rendering/opening credential views must not read storage")
+        require(backend.calls.isEmpty, "Rendering Settings and the dashboard must not read the IPinfo token")
+        require(profileBackend.calls.count <= 1 && profileBackend.calls.allSatisfy { $0 == "read" },
+                "Opening the profile view may read the proxy info once, and only read it")
         require(await client.calls.isEmpty, "Refresh and Test must not load credentials implicitly")
-        print("PASS: startup, status, window rendering, activation, refresh and Test make no Keychain calls; IPinfo waits without quota use")
+        print("PASS: startup, status, activation, refresh and Test make no Keychain calls; the profile view reads the proxy info at most once; IPinfo waits without quota use")
+
+        try profileButtonRowChecks()
+        try dockIconChecks(output: output)
 
         let pausedUntil = Date().addingTimeInterval(300)
         ProviderCooldownStore().save(retryNotBefore: pausedUntil, for: .ipinfoLite)
@@ -94,6 +99,74 @@ enum CredentialAppTests {
         require(mixedBackend.calls.isEmpty, "Mixed rotation must not query Keychain")
         mixed.stop()
         print("PASS: mixed pools continue anonymous monitoring without reading the saved IPinfo token")
+    }
+
+    /// Load proxy info, Save and Remove form one row (an HStack with no fallback) that fits the
+    /// profile form's narrowest value column: about 472 pt column − GroupBox insets − 110 pt label
+    /// − 12 pt spacing ≈ 326 pt. 320 pt leaves a margin.
+    @MainActor
+    static func profileButtonRowChecks() throws {
+        let host = NSHostingView(rootView: ProxyInfoActionRow(load: {}, save: {}, remove: {}))
+        let size = host.fittingSize
+        require(size.width > 200 && size.width <= 320,
+                "The proxy-info button row must fit the 320 pt value column in one row (needs \(size.width) pt)")
+        require(size.height < 40, "The proxy-info buttons must share one row (height \(size.height) pt)")
+        print("PASS: Load proxy info, Save and Remove share one \(Int(size.width)) pt row, within the narrowest value column")
+    }
+
+    /// The Dock icon is the menu-bar label itself: one render per visible change, none otherwise.
+    /// Writes `menubar-<state>.png` and `dock-<state>.png` side by side for visual comparison.
+    @MainActor
+    static func dockIconChecks(output: URL) throws {
+        let now = Date()
+        let singapore = ExitIPSnapshot(ipAddress: "192.0.2.10", countryCode: "SG", countryName: "Singapore",
+                                       provider: .ipWhois, checkedAt: now)
+        let japan = ExitIPSnapshot(ipAddress: "198.51.100.7", countryCode: "JP", countryName: "Japan",
+                                   provider: .ipWhois, checkedAt: now)
+        let changed = ExitIPSnapshot(ipAddress: "198.51.100.7", countryCode: "JP", countryName: "Japan",
+                                     provider: .ipWhois, checkedAt: now,
+                                     countryChange: CountryChange(previousCode: "SG", previousName: "Singapore",
+                                                                  changedAt: now, highlightUntil: now.addingTimeInterval(600)))
+        let stale = ExitIPSnapshot(ipAddress: "192.0.2.10", countryCode: "SG", countryName: "Singapore",
+                                   provider: .ipWhois, checkedAt: now.addingTimeInterval(-7_200))
+        func label(_ snapshot: ExitIPSnapshot?, _ style: MenuBarDisplayStyle = .flag,
+                   error: Bool = false) -> MenuBarCountryLabel {
+            MenuBarCountryLabel(snapshot: snapshot, displayStyle: style, refreshInterval: .fifteenMinutes,
+                                indicators: MonitorIndicatorState(errorMessage: error ? "Lookup failed" : nil,
+                                                                  suppressLocation: error),
+                                date: now)
+        }
+        let dock = DockIconController()
+        let states: [(String, MenuBarCountryLabel, Bool)] = [
+            ("flag-sg", label(singapore), true), ("flag-jp", label(japan), true),
+            ("changed", label(changed), true), ("error", label(singapore, error: true), true),
+            ("stale", label(stale), true), ("locating", label(nil), true),
+            ("code", label(singapore, .code), true), ("name-dark", label(singapore, .name), false),
+        ]
+        for (name, menuBar, light) in states {
+            require(dock.update(label: menuBar, darkAppearance: !light, apply: false), "\(name) must render a new icon")
+            require(!dock.update(label: menuBar, darkAppearance: !light, apply: false), "An unchanged \(name) must not re-render")
+            guard let image = dock.image, let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                fatalError("No Dock icon for \(name)")
+            }
+            require(cgImage.width == 512 && cgImage.height == 512, "\(name) icon must be a 512 × 512 square")
+            let bitmap = NSBitmapImageRep(cgImage: cgImage)
+            let visible = stride(from: 0, to: 512, by: 8).reduce(0) { count, x in
+                count + stride(from: 0, to: 512, by: 8).filter { (bitmap.colorAt(x: x, y: $0)?.alphaComponent ?? 0) > 0.1 }.count
+            }
+            require(visible > 40, "\(name) icon must draw the label, not an empty canvas")
+            let png = bitmap.representation(using: .png, properties: [:])!
+            try png.write(to: output.appendingPathComponent("dock-\(name).png"))
+            let renderer = ImageRenderer(content: menuBar.fixedSize().environment(\.colorScheme, light ? .light : .dark))
+            renderer.scale = 4
+            if let small = renderer.cgImage,
+               let data = NSBitmapImageRep(cgImage: small).representation(using: .png, properties: [:]) {
+                try data.write(to: output.appendingPathComponent("menubar-\(name).png"))
+            }
+        }
+        require(dock.update(label: label(singapore), darkAppearance: true, apply: false),
+                "A menu-bar appearance change must re-render")
+        print("PASS: the Dock icon re-renders the menu-bar label only when its flag, error, change, stale, style or appearance changes")
     }
 
     static func snapshot(_ provider: ProviderID) -> ExitIPSnapshot {

@@ -24,7 +24,11 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
         }
         SingleInstanceController.didFinishLaunching()
         // Schedule after the launch callback so readiness proves the main queue is servicing work.
-        DispatchQueue.main.async { LaunchDiagnostics.markReady() }
+        DispatchQueue.main.async {
+            LaunchDiagnostics.markReady()
+            // After readiness, so a slow Background Task Management reply can't delay startup.
+            DispatchQueue.main.async { LoginItemSync.syncAtLaunch() }
+        }
     }
 
     /// Opening the app again while it runs (Finder, Spotlight, Launchpad, `open`) shows the
@@ -60,11 +64,25 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
     /// Minimizing is not closing. Only the dashboard owns the app's Dock presence.
     static func updateActivationPolicy() {
         NSApp.setActivationPolicy(DashboardWindowController.shared.isOpen ? .regular : .accessory)
+        // The Dock tile is recreated when the app becomes regular; keep the menu-bar icon on it.
+        DockIconController.shared.reapply()
     }
 
     @objc private func openDashboard(_ sender: Any?) { Self.showDashboard() }
     @objc private func openSettings(_ sender: Any?) { Self.showSettings() }
     @objc private func openEventLog(_ sender: Any?) { Self.showEventLog() }
+
+    /// ⌘Q from a window means "put it away": the app lives in the menu bar, so its windows close
+    /// and monitoring continues. Quitting is the Quit menu item or the dashboard's Quit button;
+    /// Quit Apple Events (Homebrew, logout, osascript) are unaffected.
+    @objc private func closeWindowsFromShortcut(_ sender: Any?) {
+        let windows = [DashboardWindowController.shared.window, SettingsWindowController.shared.window,
+                       EventLogWindowController.shared.window]
+            .compactMap { $0 }
+            .filter { $0.isVisible || $0.isMiniaturized }
+        windows.forEach { $0.close() }
+        RuntimeLog.shared.info("windows_closed_by_shortcut", fields: ["count": String(windows.count)])
+    }
 
     private func installApplicationMenus() {
         let main = NSMenu()
@@ -84,7 +102,13 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
         hideOthers.keyEquivalentModifierMask = [.command, .option]
         app.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        app.addItem(withTitle: "Quit Exit IP Monitor", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        app.addItem(withTitle: "Quit Exit IP Monitor", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        // ⌘Q closes the windows instead of quitting (the 1.0 dashboard quit the app on ⌘Q).
+        let closeWindows = app.addItem(withTitle: "Close Exit IP Windows",
+                                       action: #selector(closeWindowsFromShortcut(_:)), keyEquivalent: "q")
+        closeWindows.target = self
+        closeWindows.isHidden = true
+        closeWindows.allowsKeyEquivalentWhenHidden = true
 
         submenu("File").addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         let edit = submenu("Edit")

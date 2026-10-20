@@ -6,6 +6,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Use the section for a version as that release's notes.
 
+## [2.0] - 2026-10-20
+
+Version **2.0 (build 9)**, a new `v2.0` release built and tested on this Mac without GitHub
+Actions; v1.0 stays published as the rollback. Upgrade with
+`brew upgrade --cask jxz345/tap/exit-ip-monitor`. It asks for your password once, for the
+provider.
+
+### Install
+
+- `brew install`, `upgrade` and `reinstall` again set up the Tailscale → Clash Verge provider:
+  the cask's postflight runs the bundled `daemon.sh install` with `sudo` after the app is in
+  place, with one password prompt, as builds 2–6 and Sleepless did. The provider is a
+  LaunchDaemon, so it survives restarts.
+- The step is skipped while the opt-out marker from `daemon.sh remove` exists. A cancelled
+  password or a failed setup never fails the app install; the dashboard then offers
+  **Install Provider**.
+- `brew uninstall` removes both services, workers, files and the grant through the removal
+  grant, without a password.
+- Unchanged: the preflight that verifies the signature and removes the download quarantine (so
+  there is no **Open Anyway**), and the uninstall cleanup.
+
+### App
+
+- **Dock icon = menu-bar icon.** While the dashboard is open, the Dock and Cmd-Tab icon is the
+  menu-bar label itself: the same flag or text style, stale prefix, stop symbol after a failed
+  lookup, and country-change highlight. It updates at the same moment as the menu bar, colored
+  for the system appearance.
+- **⌘Q closes the windows** (dashboard, Settings, Event Log) instead of quitting, so monitoring
+  continues. Quit with **Quit Exit IP** or the app menu's Quit. Homebrew and logout quits are
+  unchanged. In 1.0, ⌘Q from the dashboard quit the whole app.
+- **Launch at login is remembered.** The choice is stored, and every launch restores a
+  registration that macOS dropped (for example after a reinstall). The Event Log shows
+  restorations and failures.
+- **Proxy info.** The dashboard reads the saved proxy from the Keychain once per app session, in
+  the background, so the Clash Verge profile form is filled when it opens. The buttons are now
+  **Load proxy info**, **Save** and **Remove**, with captions that say they act on the one
+  Keychain entry, and that Save writes and Remove deletes the generated profile file. The IPinfo
+  token is still read only by its explicit Load or Save.
+- **Load proxy info**, **Save** and **Remove** share one row at every window size. The
+  dashboard has one **Open Clash Verge** button, in Apply in Clash Verge; the provider's
+  Clash Verge row shows only whether it is installed.
+- `diagnose-launch.sh` adds the lock/unlock hint to a blocked-before-entry error.
+
+### Docs
+
+- README gains **Maintainer notes (for the next coding session)**: the cask design, the macOS 27
+  parked-approval signature and recovery, fresh-identity trials, the install matrix, and the app
+  techniques above.
+
 ## [1.0] - 2026-10-19
 
 Replacement release **1.0 (8)**. Built and tested locally, published manually without GitHub
@@ -32,8 +81,7 @@ The optional Tailscale → Clash Verge integration requires explicit setup.
 - Tested on the affected Mac, each trial starting from a fresh Gatekeeper prompt. **Use Password** parked the
   approval; removing quarantine did not release it, but lock/unlock did. **Touch ID** approved
   at once. The cask's preflight steps opened the app without a prompt on install and reinstall.
-- The release ZIP, its checksum and build 1.0 (8) are unchanged. The next build's
-  `diagnose-launch.sh` adds the lock/unlock hint to its blocked-before-entry error.
+- The release ZIP, its checksum and build 1.0 (8) were unchanged by this cask update.
 
 ### Install or replace an earlier 1.0 build
 
@@ -43,7 +91,7 @@ brew install --cask jxz345/tap/exit-ip-monitor
 
 Existing Homebrew users must follow the README clean-uninstall migration for old cached
 hooks, clear the cached ZIP, and reinstall. `brew upgrade` cannot detect this same-version
-replacement. Installation requests no provider setup and startup accesses no Keychain.
+replacement. Startup accesses no Keychain.
 The app is not notarized. After verifying the signature, the cask removes the app's download
 quarantine, so Homebrew installs need no **Open Anyway** (see above).
 A real Homebrew install and reinstall passed, including termination of an actual hung app

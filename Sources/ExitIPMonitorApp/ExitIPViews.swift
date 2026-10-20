@@ -37,6 +37,14 @@ struct MenuBarCountryLabel: View {
         .accessibilityLabel(accessibilityText(at: date))
     }
 
+    /// Everything that changes what this label draws, so the Dock copy re-renders only when the
+    /// menu bar's appearance of it changes.
+    var visualKey: String {
+        let isChanged = !indicators.suppressLocation && (snapshot?.isCountryChangeHighlighted(at: date) ?? false)
+        return [displayStyle.rawValue, indicators.suppressLocation ? "error" : statusLabel(at: date),
+                isChanged ? "changed" : "-"].joined(separator: "|")
+    }
+
     func accessibilityText(at date: Date) -> String {
         if indicators.suppressLocation { return "Exit IP error" }
         guard let snapshot else { return "Exit IP location unavailable" }
@@ -557,6 +565,8 @@ private struct LaunchAtLoginControl: View {
     }
 
     private func setEnabled(_ enabled: Bool) {
+        // Remembered, so the next launch restores a registration macOS dropped.
+        LoginItemSync.store(enabled)
         do {
             if enabled {
                 try SMAppService.mainApp.register()
@@ -658,12 +668,10 @@ private struct TailscaleVergeProviderSection: View {
                     }
                     GridRow(alignment: .top) {
                         DetailLabel(text: "Clash Verge")
-                        if let vergeURL = ClashVergeApp.url {
-                            HStack(spacing: 8) {
-                                Text("Installed")
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                Button("Open") { ClashVergeApp.open(vergeURL) }
-                            }
+                        // Status only; Apply in Clash Verge has the one Open Clash Verge button.
+                        if ClashVergeApp.url != nil {
+                            Text("Installed")
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
                             Text(ClashVergeApp.missingNote)
                                 .foregroundStyle(.orange)
@@ -681,7 +689,7 @@ private struct TailscaleVergeProviderSection: View {
                     Label("Optional background provider is not installed", systemImage: "info.circle")
                         .foregroundStyle(.secondary)
                 }
-                GroupCaption("Exit IP monitoring works without this provider. Install it only to enable Tailscale routing in Clash Verge. Installation requires administrator authentication; your saved profile stays available.")
+                GroupCaption("Exit IP monitoring works without this provider. Install it only to enable Tailscale routing in Clash Verge. Installation requires administrator authentication; your proxy info stays available.")
             }
 
             if installer.isInstalling {
@@ -753,8 +761,9 @@ struct ClashVergeProfileSection: View {
     var body: some View {
         DashboardGroup("Clash Verge profile") {
             if !providerInstalled {
-                GroupCaption("You can save your profile now. Install the background provider before using Tailscale routing.")
+                GroupCaption("You can save your proxy info now. Install the background provider before using Tailscale routing.")
             }
+            GroupCaption("Proxy info · stored in your Keychain")
             DetailGrid {
                 GridRow {
                     DetailLabel(text: "Name")
@@ -787,11 +796,9 @@ struct ClashVergeProfileSection: View {
                 GridRow {
                     DetailLabel(text: "")
                     VStack(alignment: .leading, spacing: 4) {
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 8) { profileActions }
-                            VStack(alignment: .leading, spacing: 8) { profileActions }
-                        }
-                        .buttonStyle(DashboardButtonStyle(minimumWidth: 120))
+                        ProxyInfoActionRow(load: { Task { await loadSavedProfile() } },
+                                           save: { Task { await save() } },
+                                           remove: { Task { await remove() } })
                         if let message {
                             Text(message)
                                 .font(.footnote)
@@ -801,7 +808,7 @@ struct ClashVergeProfileSection: View {
                     }
                 }
                 if fileExists {
-                    PathRow(label: "Profile file", value: (ClashVergeProfile.fileURL.path as NSString).abbreviatingWithTildeInPath) {
+                    PathRow(label: "Clash Verge profile file", value: (ClashVergeProfile.fileURL.path as NSString).abbreviatingWithTildeInPath) {
                         Button("Open") { openInTextEdit(ClashVergeProfile.fileURL) }
                         Button("Finder") { NSWorkspace.shared.activateFileViewerSelecting([ClashVergeProfile.fileURL]) }
                     }
@@ -811,10 +818,9 @@ struct ClashVergeProfileSection: View {
             .disabled(credentials.isBusy)
             if credentials.isBusy {
                 GroupCaption("Waiting for Keychain… Complete any macOS access prompt. Monitoring continues.")
-            } else if credentials.state == .notLoaded {
-                GroupCaption("Saved profile not loaded. Use Load saved profile to read it from Keychain.")
             }
-            GroupCaption("Keychain is accessed only when you load, save, or remove. The profile file is readable only by you.")
+            GroupCaption("Save stores the proxy info in your Keychain and writes the Clash Verge profile file. Remove deletes the proxy info from your Keychain and the profile file generated from it; Clash Verge keeps the copy it imported.")
+            GroupCaption("The dashboard reads the proxy info from your Keychain when it opens. The profile file is readable only by you.")
         }
         .task {
             // Restoring this session's memory and inspecting file metadata do not read Keychain.
@@ -823,14 +829,8 @@ struct ClashVergeProfileSection: View {
             }
             restoredSession = true
             refreshFileState()
-        }
-    }
-
-    private var profileActions: some View {
-        Group {
-            Button("Load saved profile") { Task { await loadSavedProfile() } }
-            Button("Save Profile") { Task { await save() } }
-            Button("Remove", role: .destructive) { Task { await remove() } }
+            // One automatic Keychain read per app session, off the main thread (CredentialSession).
+            if credentials.state == .notLoaded { await loadSavedProfile(automatic: true) }
         }
     }
 
@@ -843,24 +843,26 @@ struct ClashVergeProfileSection: View {
         password = settings.password
     }
 
-    private func loadSavedProfile() async {
-        guard await credentials.load() else {
+    /// `automatic` is the dashboard's first read; it never repeats or retries within a session.
+    private func loadSavedProfile(automatic: Bool = false) async {
+        let loaded = automatic ? await credentials.loadIfNotLoaded() : await credentials.load()
+        guard loaded else {
             if let error = credentials.errorMessage { show(error, error: true) }
             return
         }
         guard let text = credentials.value else {
-            show("No saved profile found in Keychain; the existing file is unchanged", error: false)
+            show("No proxy info in your Keychain yet: enter your proxy, then Save.", error: false)
             return
         }
         guard let settings = ClashVergeProfile.decode(text) else {
-            show("The saved profile could not be decoded; the existing file is unchanged", error: true)
+            show("The proxy info in your Keychain couldn't be read; the profile file is unchanged.", error: true)
             return
         }
         do {
             let settings = try settings.validated()
             try maintainClashVergeProfile(settings)
             apply(settings)
-            show("Saved profile loaded · file up to date", error: false)
+            show("Proxy info loaded · profile file up to date", error: false)
         } catch {
             show(error.localizedDescription, error: true)
         }
@@ -871,7 +873,7 @@ struct ClashVergeProfileSection: View {
         let attributes = try? FileManager.default.attributesOfItem(atPath: ClashVergeProfile.fileURL.path)
         fileExists = attributes != nil
         if message == nil, let modified = attributes?[.modificationDate] as? Date {
-            show("Written \(modified.formatted(date: .abbreviated, time: .shortened)) · import it in Clash Verge", error: false)
+            show("Profile file written \(modified.formatted(date: .abbreviated, time: .shortened)) · import it in Clash Verge", error: false)
         }
     }
 
@@ -893,8 +895,8 @@ struct ClashVergeProfileSection: View {
             name = settings.name
             server = settings.server
             show(outcome == .written
-                 ? "Written \(Date().formatted(date: .omitted, time: .shortened)) · import it in Clash Verge"
-                 : "Already up to date", error: false)
+                 ? "Proxy info saved · profile file written \(Date().formatted(date: .omitted, time: .shortened)); import it in Clash Verge"
+                 : "Proxy info saved · profile file already up to date", error: false)
         } catch {
             RuntimeLog.shared.error("clash_profile_write_failed", fields: ["error": error.localizedDescription])
             show(error.localizedDescription, error: true)
@@ -918,7 +920,7 @@ struct ClashVergeProfileSection: View {
             username = ""
             password = ""
             type = .socks5
-            show("Removed · Clash Verge keeps its own imported copy", error: false)
+            show("Proxy info removed · profile file deleted; Clash Verge keeps its imported copy", error: false)
         } catch {
             show(error.localizedDescription, error: true)
         }
@@ -928,6 +930,25 @@ struct ClashVergeProfileSection: View {
     private func show(_ text: String, error: Bool) {
         message = text
         messageIsError = error
+    }
+}
+
+/// Load proxy info, Save and Remove, always in one row (measured by the app test). The profile form's
+/// value column is at least ~326 pt, both in the default two-column window and at the 520 pt minimum.
+struct ProxyInfoActionRow: View {
+    let load: () -> Void
+    let save: () -> Void
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button("Load proxy info", action: load)
+            Button("Save", action: save)
+            Button("Remove", role: .destructive, action: remove)
+        }
+        // A 56 pt label minimum keeps Save and Remove alike (~80 pt buttons) and the row ≤ 320 pt.
+        .buttonStyle(DashboardButtonStyle(minimumWidth: 56))
+        .fixedSize()
     }
 }
 
@@ -956,7 +977,7 @@ private struct ClashVergeApplySteps: View {
                     .foregroundStyle(.orange)
             }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 5) {
-                step(1, "Save Profile writes the profile file.")
+                step(1, "Save writes the profile file.")
                 step(2, "Clash Verge → Profiles → New. In Create Profile, set Type to Local, Choose File → clash-verge-profile.yaml, then Save.")
                 step(3, "Right-click the new profile → Select. Clash Verge reloads once.")
                 step(4, "Proxies → Proxy Provider → tailscale-live lists TS-NATIVE, and Status above reads Direct.")
