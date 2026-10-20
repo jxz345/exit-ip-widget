@@ -12,8 +12,6 @@ final class DaemonInstallationModel: ObservableObject {
     @Published private(set) var isInstalling = false
     @Published private(set) var message: String?
     @Published private(set) var hasError = false
-    @Published private(set) var details = ""
-    @Published private(set) var diagnosticURL: URL?
 
     var isInstalled: Bool { monitorInstalled && responderInstalled }
 
@@ -36,10 +34,9 @@ final class DaemonInstallationModel: ObservableObject {
         }
         isInstalling = true
         hasError = false
-        details = ""
         message = "Complete macOS administrator authentication to install the background provider."
+        // The setup output is saved here: the outcome check reads it, and the runtime log points to it.
         let logURL = RuntimeLog.shared.directory.appendingPathComponent("daemon-setup-\(UUID().uuidString).log")
-        diagnosticURL = logURL
         let appleScript = DaemonInstallation.appleScript(scriptPath: script.path, userName: NSUserName())
         RuntimeLog.shared.info("daemon_install_started", fields: ["log": logURL.path])
         Task {
@@ -48,7 +45,6 @@ final class DaemonInstallationModel: ObservableObject {
             }.value
             reload()
             isInstalling = false
-            details = result.output
             switch result.outcome {
             case .succeeded:
                 message = "Background provider installed and both services loaded."
@@ -58,7 +54,7 @@ final class DaemonInstallationModel: ObservableObject {
                 RuntimeLog.shared.info("daemon_install_cancelled", fields: ["log": logURL.path])
             case .failed:
                 hasError = true
-                message = "Provider installation did not complete. Review the details below, then retry."
+                message = "Provider installation did not complete. Click Retry Installation to try again."
                 RuntimeLog.shared.error("daemon_install_failed", fields: ["log": logURL.path])
             }
         }

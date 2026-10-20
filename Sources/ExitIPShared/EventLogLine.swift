@@ -64,7 +64,7 @@ public enum EventLogLine {
         case "daemon_install_started": return "Provider installation started · awaiting macOS authentication"
         case "daemon_install_succeeded": return "Provider installed · both background services loaded"
         case "daemon_install_cancelled": return "Provider installation cancelled"
-        case "daemon_install_failed": return "Provider installation failed · see dashboard installation details"
+        case "daemon_install_failed": return "Provider installation failed"
         case "clash_profile_write_failed":
             return "Clash Verge profile not written" + detail(fields["error"])
         case "tailscale_provider_changed":

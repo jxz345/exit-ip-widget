@@ -39,6 +39,8 @@ final class EventLogLineTests: XCTestCase {
         func message(_ event: String, _ fields: [String: String]) -> String? { EventLogLine.message(event: event, fields: fields) }
         XCTAssertEqual(message("lookup_succeeded", ["provider": "ipWhois", "country": "SG"]), "Lookup OK · IPWHOIS.io · SG")
         XCTAssertEqual(message("lookup_failed", ["provider": "ipapiCo", "message": "timed out"]), "Lookup failed · ipapi.co · timed out")
+        // The dashboard no longer shows installation details, so the line doesn't point there.
+        XCTAssertEqual(message("daemon_install_failed", ["log": "/tmp/daemon-setup.log"]), "Provider installation failed")
         XCTAssertEqual(message("refresh_skipped", ["trigger": "app_active", "reason": "fresh"]),
                        "Skipped · app activated · result under 2 min old")
         XCTAssertEqual(message("refresh_skipped", ["trigger": "screens_wake", "reason": "event_window"]),

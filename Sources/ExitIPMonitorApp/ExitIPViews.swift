@@ -710,22 +710,6 @@ private struct TailscaleVergeProviderSection: View {
                     .foregroundStyle(installer.hasError ? Color.orange : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if !installer.details.isEmpty {
-                DisclosureGroup("Installation details") {
-                    ScrollView {
-                        Text(installer.details)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 180)
-                }
-            }
-            if let logURL = installer.diagnosticURL {
-                Button("Show Installation Log") {
-                    NSWorkspace.shared.activateFileViewerSelecting([logURL])
-                }
-            }
         }
         .task {
             while !Task.isCancelled {

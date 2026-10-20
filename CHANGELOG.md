@@ -48,6 +48,8 @@ provider.
   dashboard has one **Open Clash Verge** button, in Apply in Clash Verge; the provider's
   Clash Verge row shows only whether it is installed.
 - `diagnose-launch.sh` adds the lock/unlock hint to a blocked-before-entry error.
+- The provider section no longer shows **Installation details** or **Show Installation Log**.
+  The setup output is still saved to `~/Library/Application Support/ExitIPMonitor/Logs/daemon-setup-*.log`.
 
 ### Docs
 
