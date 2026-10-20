@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Use the section for a version as that release's notes.
 
+## [Unreleased]
+
+### App
+
+- The provider section no longer shows **Installation details** or **Show Installation Log**.
+  The setup output is still saved to `~/Library/Application Support/ExitIPMonitor/Logs/daemon-setup-*.log`.
+
 ## [2.0] - 2026-10-20
 
 Version **2.0 (build 9)**, a new `v2.0` release built and tested on this Mac without GitHub
@@ -48,8 +55,6 @@ provider.
   dashboard has one **Open Clash Verge** button, in Apply in Clash Verge; the provider's
   Clash Verge row shows only whether it is installed.
 - `diagnose-launch.sh` adds the lock/unlock hint to a blocked-before-entry error.
-- The provider section no longer shows **Installation details** or **Show Installation Log**.
-  The setup output is still saved to `~/Library/Application Support/ExitIPMonitor/Logs/daemon-setup-*.log`.
 
 ### Docs
 
