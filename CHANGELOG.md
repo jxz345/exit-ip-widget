@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Use the section for a version as that release's notes.
 
+## [2.1] - 2026-10-25
+
+Version **2.1 (build 12)**, built and tested locally without GitHub Actions.
+
+### App
+
+- Failed exit-IP lookups now show the red stop icon in the menu bar and the Dock, matching the
+  dashboard header.
+- The generated Clash Verge profile uses port 7890 and direct routes for YouTube, Homebrew/GitHub,
+  Microsoft CDN, and Zoom traffic.
+
 ## [2.0] - 2026-10-20
 
 Version **2.0 (build 11)**, built and tested on this Mac without GitHub Actions; v1.0 stays

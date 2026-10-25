@@ -28,6 +28,7 @@ struct MenuBarCountryLabel: View {
             if indicators.suppressLocation {
                 // A stop sign in place of the flag; text styles also say so in words.
                 Image(systemName: ExitIPIndicatorSymbol.lookupError)
+                    .foregroundStyle(.red)
                 if displayStyle != .flag {
                     Text("Exit IP error")
                         .lineLimit(1)

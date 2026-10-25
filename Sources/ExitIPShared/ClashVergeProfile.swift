@@ -149,7 +149,7 @@ public enum ClashVergeProfile {
         ---
         mode: rule
         find-process-mode: always
-        mixed-port: 7897
+        mixed-port: 7890
         allow-lan: false
         log-level: info
         ipv6: true
@@ -234,6 +234,32 @@ public enum ClashVergeProfile {
           - PROCESS-NAME,io.tailscale.ipn.macsys.network-extension,DIRECT
           - DOMAIN-SUFFIX,tailscale.com,DIRECT
           - DOMAIN-SUFFIX,tailscale.io,DIRECT
+
+          # YouTube + CDN
+          - DOMAIN-SUFFIX,youtube.com,DIRECT
+          - DOMAIN-SUFFIX,youtu.be,DIRECT
+          - DOMAIN-SUFFIX,youtube-nocookie.com,DIRECT
+          - DOMAIN-SUFFIX,googlevideo.com,DIRECT
+          - DOMAIN-SUFFIX,ytimg.com,DIRECT
+          - DOMAIN-SUFFIX,ggpht.com,DIRECT
+          - DOMAIN,youtubei.googleapis.com,DIRECT
+          # Homebrew (brew install pulls bottles from GitHub's registry)
+          - DOMAIN-SUFFIX,brew.sh,DIRECT
+          - DOMAIN,ghcr.io,DIRECT
+          - DOMAIN-SUFFIX,githubusercontent.com,DIRECT
+          - DOMAIN-SUFFIX,github.com,DIRECT
+          # Microsoft CDN
+          - DOMAIN-SUFFIX,microsoft.com,DIRECT
+          - DOMAIN-SUFFIX,msecnd.net,DIRECT
+          - DOMAIN-SUFFIX,azureedge.net,DIRECT
+          - DOMAIN-SUFFIX,azurefd.net,DIRECT
+          - DOMAIN-SUFFIX,msedge.net,DIRECT
+          - DOMAIN-SUFFIX,windowsupdate.com,DIRECT
+          - DOMAIN-SUFFIX,aka.ms,DIRECT
+          # Zoom
+          - DOMAIN-SUFFIX,zoom.us,DIRECT
+          - DOMAIN-SUFFIX,zoom.com,DIRECT
+          - DOMAIN-SUFFIX,zoomgov.com,DIRECT
 
           - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
           - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve

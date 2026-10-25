@@ -136,10 +136,24 @@ enum CredentialAppTests {
                                                                   suppressLocation: error),
                                 outsideAllowlist: outside, date: now)
         }
+        func redCoverage(_ image: CGImage, sampleStride: Int) -> (opaque: Int, red: Int) {
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            var opaque = 0
+            var red = 0
+            for x in stride(from: 0, to: image.width, by: sampleStride) {
+                for y in stride(from: 0, to: image.height, by: sampleStride) {
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), color.alphaComponent > 0.5 else { continue }
+                    opaque += 1
+                    if color.redComponent > 0.7 && color.greenComponent < 0.4 && color.blueComponent < 0.4 { red += 1 }
+                }
+            }
+            return (opaque, red)
+        }
+        let errorLabel = label(singapore, error: true)
         let dock = DockIconController()
         let states: [(String, MenuBarCountryLabel, Bool)] = [
             ("flag-sg", label(singapore), true), ("flag-jp", label(japan), true),
-            ("changed", label(changed), true), ("error", label(singapore, error: true), true),
+            ("changed", label(changed), true), ("error", errorLabel, true),
             ("stale", label(stale), true), ("locating", label(nil), true),
             ("code", label(singapore, .code), true), ("name-dark", label(singapore, .name), false),
             ("outside-allowlist", label(singapore, outside: true), true),
@@ -166,6 +180,19 @@ enum CredentialAppTests {
                 try data.write(to: output.appendingPathComponent("menubar-\(name).png"))
             }
         }
+        let errorRenderer = ImageRenderer(content: errorLabel.fixedSize().environment(\.colorScheme, .light))
+        guard let errorMenuBarImage = errorRenderer.cgImage else { fatalError("No menu-bar error image") }
+        let menuBarErrorCoverage = redCoverage(errorMenuBarImage, sampleStride: 1)
+        require(menuBarErrorCoverage.opaque > 3 && menuBarErrorCoverage.red * 10 >= menuBarErrorCoverage.opaque * 9,
+                "The menu-bar lookup error icon must be red (\(menuBarErrorCoverage.red) of \(menuBarErrorCoverage.opaque) red)")
+        require(dock.update(label: errorLabel, darkAppearance: false, apply: false),
+                "The lookup error must re-render the Dock icon")
+        guard let errorDockImage = dock.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            fatalError("No Dock error icon")
+        }
+        let dockErrorCoverage = redCoverage(errorDockImage, sampleStride: 8)
+        require(dockErrorCoverage.opaque > 40 && dockErrorCoverage.red * 10 >= dockErrorCoverage.opaque * 9,
+                "The Dock lookup error icon must be red (\(dockErrorCoverage.red) of \(dockErrorCoverage.opaque) red)")
         require(dock.update(label: label(singapore), darkAppearance: true, apply: false),
                 "A menu-bar appearance change must re-render")
         print("PASS: the Dock icon re-renders the menu-bar label only when its flag, error, change, stale, style or appearance changes")
@@ -186,16 +213,9 @@ enum CredentialAppTests {
         guard let stopImage = dock.image?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             fatalError("No Dock icon outside the allowlist")
         }
-        let stop = NSBitmapImageRep(cgImage: stopImage)
-        var opaque = 0, red = 0
-        for x in stride(from: 0, to: 512, by: 8) {
-            for y in stride(from: 0, to: 512, by: 8) {
-                guard let color = stop.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), color.alphaComponent > 0.5 else { continue }
-                opaque += 1
-                if color.redComponent > 0.7 && color.greenComponent < 0.4 && color.blueComponent < 0.4 { red += 1 }
-            }
-        }
-        require(opaque > 40 && red * 10 >= opaque * 9, "The Dock icon must be the red stop sign alone (\(red) of \(opaque) red)")
+        let stopCoverage = redCoverage(stopImage, sampleStride: 8)
+        require(stopCoverage.opaque > 40 && stopCoverage.red * 10 >= stopCoverage.opaque * 9,
+                "The Dock icon must be the red stop sign alone (\(stopCoverage.red) of \(stopCoverage.opaque) red)")
         require(dock.update(label: label(singapore), darkAppearance: false, apply: false),
                 "Returning to the allowlist must restore the menu-bar label in the Dock")
         print("PASS: outside the allowlist the menu bar adds a red stop sign beside the flag and the Dock shows only the red stop sign")

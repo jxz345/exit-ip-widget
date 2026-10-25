@@ -265,8 +265,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    MARKETING_VERSION: "2.0"
-    CURRENT_PROJECT_VERSION: "11"
+    MARKETING_VERSION: "2.1"
+    CURRENT_PROJECT_VERSION: "12"
 targets:
   ExitIPMonitor:
     type: application

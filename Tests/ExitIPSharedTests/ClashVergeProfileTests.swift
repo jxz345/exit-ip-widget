@@ -69,7 +69,7 @@ final class ClashVergeProfileTests: XCTestCase {
               - "tcp://100.100.100.100:53#TS-DIRECT"
         """))
         let rules = lines(text).filter { $0.hasPrefix("  - ") && ($0.contains(",DIRECT") || $0.contains(",TS-DIRECT") || $0.contains("MATCH")) }
-        XCTAssertEqual(rules.count, 17)
+        XCTAssertEqual(rules.count, 38)
         XCTAssertEqual(rules.last, "  - MATCH,Proxy")
         XCTAssertTrue(text.contains("  route-exclude-address:\n  - 100.64.0.0/10\n  - fd7a:115c:a1e0::/48\n"))
     }
