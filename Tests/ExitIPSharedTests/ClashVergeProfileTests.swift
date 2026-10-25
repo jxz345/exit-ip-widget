@@ -153,6 +153,83 @@ final class ClashVergeProfileTests: XCTestCase {
         XCTAssertEqual(try mode(url), 0o600)
     }
 
+    // MARK: Copy for Clash Verge
+
+    private func copyDate(_ iso: String = "2026-10-24T20:00:00Z") throws -> (Date, Calendar) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Singapore"))
+        return (try XCTUnwrap(ISO8601DateFormatter().date(from: iso)), calendar)
+    }
+
+    private func files(_ directory: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+    }
+
+    func testCopyIsNamedForClashVergeAndPrivate() throws {
+        let source = temporaryFile()
+        let text = try ClashVergeProfile.render(sample)
+        try ClashVergeProfile.write(text, to: source)
+        let (date, calendar) = try copyDate()
+
+        let copy = try ClashVergeProfile.writeCopy(of: source, existingNames: [], date: date, calendar: calendar)
+        XCTAssertEqual(copy.lastPathComponent, "Exit IP Monitor 2026-10-25 (1).yaml")
+        XCTAssertEqual(copy.deletingLastPathComponent(), source.deletingLastPathComponent())
+        XCTAssertEqual(try String(contentsOf: copy, encoding: .utf8), text)
+        XCTAssertEqual(try mode(copy), 0o600)
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), text, "The profile file itself is untouched")
+
+        let again = try ClashVergeProfile.writeCopy(of: source, existingNames: ["clash-verge 5.yaml"], date: date, calendar: calendar)
+        XCTAssertEqual(again, copy, "Until Clash Verge has the name, Finder shows the same copy")
+        XCTAssertEqual(try files(source.deletingLastPathComponent()), ["Exit IP Monitor 2026-10-25 (1).yaml", "clash-verge-profile.yaml"])
+    }
+
+    func testANewCopyMovesPastNamesClashVergeHasAndReplacesTheOldCopy() throws {
+        let source = temporaryFile()
+        try ClashVergeProfile.write("a: 1\n", to: source)
+        let (date, calendar) = try copyDate()
+        try ClashVergeProfile.writeCopy(of: source, existingNames: [], date: date, calendar: calendar)
+
+        let dropped = try ClashVergeProfile.writeCopy(of: source, existingNames: ["Exit IP Monitor 2026-10-25 (1).yaml"],
+                                                      date: date, calendar: calendar)
+        XCTAssertEqual(dropped.lastPathComponent, "Exit IP Monitor 2026-10-25 (2).yaml")
+        XCTAssertEqual(try files(source.deletingLastPathComponent()), ["Exit IP Monitor 2026-10-25 (2).yaml", "clash-verge-profile.yaml"],
+                       "Only one copy of the credentials is kept")
+
+        let remote = try ClashVergeProfile.writeCopy(of: source, existingNames: ["Exit IP Monitor 2026-10-25 (1)", "Exit IP Monitor 2026-10-25 (2).yaml"],
+                                                     date: date, calendar: calendar)
+        XCTAssertEqual(remote.lastPathComponent, "Exit IP Monitor 2026-10-25 (3).yaml", "Names without .yaml count too")
+
+        let (tomorrow, _) = try copyDate("2026-10-25T20:00:00Z")
+        let next = try ClashVergeProfile.writeCopy(of: source, existingNames: ["Exit IP Monitor 2026-10-25 (3).yaml"],
+                                                   date: tomorrow, calendar: calendar)
+        XCTAssertEqual(next.lastPathComponent, "Exit IP Monitor 2026-10-26 (1).yaml")
+        XCTAssertEqual(try files(source.deletingLastPathComponent()), ["Exit IP Monitor 2026-10-26 (1).yaml", "clash-verge-profile.yaml"])
+    }
+
+    func testRemoveCopiesDeletesOnlyCopies() throws {
+        let source = temporaryFile()
+        try ClashVergeProfile.write("a: 1\n", to: source)
+        let directory = source.deletingLastPathComponent()
+        let (date, calendar) = try copyDate()
+        try ClashVergeProfile.writeCopy(of: source, existingNames: [], date: date, calendar: calendar)
+        let unrelated = directory.appendingPathComponent("Exit IP Monitor notes.yaml")
+        try Data().write(to: unrelated)
+
+        try ClashVergeProfile.removeCopies(in: directory)
+        XCTAssertEqual(try files(directory), ["Exit IP Monitor notes.yaml", "clash-verge-profile.yaml"])
+        XCTAssertThrowsError(try ClashVergeProfile.writeCopy(of: directory.appendingPathComponent("missing.yaml"),
+                                                             existingNames: [], date: date, calendar: calendar))
+    }
+
+    func testCopyFileNames() {
+        XCTAssertTrue(ClashVergeProfile.isCopyFileName("Exit IP Monitor 2026-10-25 (1).yaml"))
+        XCTAssertTrue(ClashVergeProfile.isCopyFileName("Exit IP Monitor 2026-10-25 (12).yaml"))
+        for name in ["clash-verge-profile.yaml", "Exit IP Monitor 2026-10-25 (1).yml", "Exit IP Monitor 2026-10-25.yaml",
+                     "Exit IP Monitor 2026-10-25 (1).yaml.bak", "x Exit IP Monitor 2026-10-25 (1).yaml", "Exit IP Monitor notes.yaml"] {
+            XCTAssertFalse(ClashVergeProfile.isCopyFileName(name), name)
+        }
+    }
+
     func testFileLocations() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         XCTAssertEqual(ClashVergeProfile.fileURL.path, home + "/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml")

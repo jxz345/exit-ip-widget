@@ -61,6 +61,8 @@ final class EventLogLineTests: XCTestCase {
                        "Country not confirmed · ipapi.co · JP")
         XCTAssertEqual(message("allowlist_warning_presented", ["ip": "<redacted-ip>"]), "Exit IP not on allowlist · <redacted-ip>")
         XCTAssertEqual(message("clash_profile_written", ["path": "/x"]), "Clash Verge profile written")
+        XCTAssertEqual(message("clash_profile_copy_written", ["name": "Exit IP Monitor 2026-10-25 (3).yaml"]),
+                       "Clash Verge profile copy · Exit IP Monitor 2026-10-25 (3).yaml")
         XCTAssertEqual(message("keychain_operation", ["operation": "load", "outcome": "started", "duration_ms": "0"]),
                        "Keychain load · started")
         XCTAssertEqual(message("refresh_skipped", ["trigger": "startup", "reason": "token_unavailable"]),

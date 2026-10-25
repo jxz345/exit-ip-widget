@@ -739,8 +739,9 @@ private struct TailscaleVergeProviderSection: View {
 }
 
 /// The full Clash Verge profile the app maintains: the proxy is entered here and kept in the Keychain,
-/// and the app writes ~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml (0600) for
-/// you to import into Clash Verge as its one Local profile. Nothing here writes into Clash Verge.
+/// and the app writes ~/Library/Application Support/ExitIPMonitor/clash-verge-profile.yaml (0600). Finder
+/// shows a copy named "Exit IP Monitor <date> (n).yaml" for you to drag into Clash Verge as a Local
+/// profile. Nothing here writes into Clash Verge.
 struct ClashVergeProfileSection: View {
     let providerInstalled: Bool
     let credentials: CredentialSession
@@ -812,7 +813,15 @@ struct ClashVergeProfileSection: View {
                 if fileExists {
                     PathRow(label: "Clash Verge profile file", value: (ClashVergeProfile.fileURL.path as NSString).abbreviatingWithTildeInPath) {
                         Button("Open") { openInTextEdit(ClashVergeProfile.fileURL) }
-                        Button("Finder") { NSWorkspace.shared.activateFileViewerSelecting([ClashVergeProfile.fileURL]) }
+                        Button("Finder") { revealCopy() }
+                    }
+                    GridRow {
+                        DetailLabel(text: "")
+                        Label("Finder shows a copy named “\(ClashVergeProfileNaming.namePrefix) <date> (n).yaml”. Drag it onto Clash Verge Rev's Profiles page to add it as a Local profile. Need to manually apply the profile in Clash Verge Rev.",
+                              systemImage: "info.circle")
+                            .font(.footnote)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
@@ -821,7 +830,7 @@ struct ClashVergeProfileSection: View {
             if credentials.isBusy {
                 GroupCaption("Waiting for Keychain… Complete any macOS access prompt. Monitoring continues.")
             }
-            GroupCaption("Save stores the proxy info in your Keychain and writes the Clash Verge profile file. Remove deletes the proxy info from your Keychain and the profile file generated from it; Clash Verge keeps the copy it imported.")
+            GroupCaption("Save stores the proxy info in your Keychain and writes the Clash Verge profile file. Remove deletes the proxy info from your Keychain and the profile file and copy generated from it; Clash Verge keeps the profiles you added.")
             GroupCaption("The dashboard reads the proxy info from your Keychain when it opens. The profile file is readable only by you.")
         }
         .task {
@@ -875,7 +884,7 @@ struct ClashVergeProfileSection: View {
         let attributes = try? FileManager.default.attributesOfItem(atPath: ClashVergeProfile.fileURL.path)
         fileExists = attributes != nil
         if message == nil, let modified = attributes?[.modificationDate] as? Date {
-            show("Profile file written \(modified.formatted(date: .abbreviated, time: .shortened)) · import it in Clash Verge", error: false)
+            show("Profile file written \(modified.formatted(date: .abbreviated, time: .shortened)) · click Finder, then drag the copy into Clash Verge", error: false)
         }
     }
 
@@ -897,7 +906,7 @@ struct ClashVergeProfileSection: View {
             name = settings.name
             server = settings.server
             show(outcome == .written
-                 ? "Proxy info saved · profile file written \(Date().formatted(date: .omitted, time: .shortened)); import it in Clash Verge"
+                 ? "Proxy info saved · profile file written \(Date().formatted(date: .omitted, time: .shortened)); click Finder, then drag the copy into Clash Verge"
                  : "Proxy info saved · profile file already up to date", error: false)
         } catch {
             RuntimeLog.shared.error("clash_profile_write_failed", fields: ["error": error.localizedDescription])
@@ -916,13 +925,14 @@ struct ClashVergeProfileSection: View {
             if FileManager.default.fileExists(atPath: ClashVergeProfile.fileURL.path) {
                 try FileManager.default.removeItem(at: ClashVergeProfile.fileURL)
             }
+            try ClashVergeProfile.removeCopies(in: ClashVergeProfile.fileURL.deletingLastPathComponent())
             name = ""
             server = ""
             port = ""
             username = ""
             password = ""
             type = .socks5
-            show("Proxy info removed · profile file deleted; Clash Verge keeps its imported copy", error: false)
+            show("Proxy info removed · profile file and copy deleted; Clash Verge keeps the profiles you added", error: false)
         } catch {
             show(error.localizedDescription, error: true)
         }
@@ -932,6 +942,17 @@ struct ClashVergeProfileSection: View {
     private func show(_ text: String, error: Bool) {
         message = text
         messageIsError = error
+    }
+
+    /// Finder: a copy under a name no Clash Verge profile has, selected for dragging into Clash Verge.
+    private func revealCopy() {
+        do {
+            let copy = try revealClashVergeProfileCopy()
+            show("Finder shows “\(copy.lastPathComponent)”: drag it onto Clash Verge Rev's Profiles page.", error: false)
+        } catch {
+            RuntimeLog.shared.error("clash_profile_write_failed", fields: ["error": error.localizedDescription])
+            show(error.localizedDescription, error: true)
+        }
     }
 }
 
@@ -959,7 +980,7 @@ private enum ClashVergeApp {
     static let missingNote = "Clash Verge Rev isn't installed: nothing uses this provider until you install it and import the profile."
 
     static var url: URL? {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "io.github.clash-verge-rev.clash-verge-rev")
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: ClashVergeProfileNaming.bundleIdentifier)
     }
 
     static func open(_ url: URL) {
@@ -980,15 +1001,15 @@ private struct ClashVergeApplySteps: View {
             }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 8, verticalSpacing: 5) {
                 step(1, "Save writes the profile file.")
-                step(2, "Clash Verge → Profiles → New. In Create Profile, set Type to Local, Choose File → clash-verge-profile.yaml, then Save.")
+                step(2, "Click Finder next to the profile file, then drag the selected “\(ClashVergeProfileNaming.namePrefix) <date> (n).yaml” onto Clash Verge → Profiles (or New → Local → Choose File). Clash Verge adds it as a Local profile with that name.")
                 step(3, "Right-click the new profile → Select. Clash Verge reloads once.")
                 step(4, "Proxies → Proxy Provider → tailscale-live lists TS-NATIVE, and Status above reads Direct.")
             }
             if let vergeURL = ClashVergeApp.url {
                 Button("Open Clash Verge") { ClashVergeApp.open(vergeURL) }
-                GroupCaption("Import again after changing the proxy. Tailscale reconnects need nothing.")
+                GroupCaption("After changing the proxy, Save, then Finder and drag again. Tailscale reconnects need nothing.")
             } else {
-                GroupCaption("Install Clash Verge Rev first, then follow steps 2–4. Import again after changing the proxy.")
+                GroupCaption("Install Clash Verge Rev first, then follow steps 2–4. After changing the proxy, Save, then Finder and drag again.")
             }
         }
     }

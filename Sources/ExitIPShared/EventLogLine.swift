@@ -67,6 +67,8 @@ public enum EventLogLine {
         case "daemon_install_failed": return "Provider installation failed"
         case "clash_profile_write_failed":
             return "Clash Verge profile not written" + detail(fields["error"])
+        case "clash_profile_copy_written":
+            return "Clash Verge profile copy" + detail(fields["name"])
         case "tailscale_provider_changed":
             if fields["served"] == "direct" {
                 return "Tailscale provider · Direct \(fields["interface"] ?? "")".trimmingCharacters(in: .whitespaces)

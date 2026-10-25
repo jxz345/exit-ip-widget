@@ -259,6 +259,21 @@ func maintainClashVergeProfile(_ settings: ClashProxySettings) throws -> ClashVe
     return outcome
 }
 
+/// Copies the profile file to "Exit IP Monitor <date> (n).yaml", a name no Clash Verge profile has, and
+/// shows the copy selected in Finder, ready to drag onto Clash Verge Rev's Profiles page (which adds it as
+/// a Local profile with that name). Only Clash Verge's profile names are read; a missing or unreadable
+/// `profiles.yaml` counts as none. Nothing is written into Clash Verge.
+@MainActor
+@discardableResult
+func revealClashVergeProfileCopy() throws -> URL {
+    let index = try? String(contentsOf: ClashVergeProfileNaming.profilesIndexURL, encoding: .utf8)
+    let names = index.map(ClashVergeProfileNaming.names(inProfilesIndex:)) ?? []
+    let copy = try ClashVergeProfile.writeCopy(of: ClashVergeProfile.fileURL, existingNames: names, date: Date())
+    RuntimeLog.shared.info("clash_profile_copy_written", fields: ["name": copy.lastPathComponent])
+    NSWorkspace.shared.activateFileViewerSelecting([copy])
+    return copy
+}
+
 /// A hosting controller that only enforces the view's minimum size. With the default sizing
 /// options, the window hugs the SwiftUI content and collapses to its minimum: the dashboard opened
 /// at 520 × 380 (one stacked column to scroll) and the scrolling Settings form as a bare title bar.
