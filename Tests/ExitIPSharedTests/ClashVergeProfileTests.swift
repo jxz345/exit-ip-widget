@@ -29,6 +29,7 @@ final class ClashVergeProfileTests: XCTestCase {
           type: socks5
           server: "192.0.2.10"
           port: 1080
+          udp: true
           username: "user"
           password: "pa\\"ss\\\\#: x"
         proxy-providers:
@@ -62,6 +63,7 @@ final class ClashVergeProfileTests: XCTestCase {
             payload:
               - name: TS-NATIVE
                 type: reject
+                udp: true
         """))
         XCTAssertTrue(text.contains("""
           nameserver-policy:
@@ -77,7 +79,7 @@ final class ClashVergeProfileTests: XCTestCase {
     func testHTTPProxyWithoutAuthOmitsCredentials() throws {
         let settings = ClashProxySettings(name: "Office", type: .http, server: "proxy.example.com", port: 8080)
         let text = try ClashVergeProfile.render(settings)
-        XCTAssertTrue(text.contains("- name: \"Office\"\n  type: http\n  server: \"proxy.example.com\"\n  port: 8080\nproxy-providers:"))
+        XCTAssertTrue(text.contains("- name: \"Office\"\n  type: http\n  server: \"proxy.example.com\"\n  port: 8080\n  udp: true\nproxy-providers:"))
         XCTAssertFalse(text.contains("username:"))
         XCTAssertFalse(text.contains("password:"))
     }

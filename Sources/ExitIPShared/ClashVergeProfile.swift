@@ -134,7 +134,8 @@ public enum ClashVergeProfile {
             "- name: \(quoted(proxy.name))",
             "  type: \(proxy.type.rawValue)",
             "  server: \(quoted(proxy.server))",
-            "  port: \(proxy.port)"
+            "  port: \(proxy.port)",
+            "  udp: true"
         ]
         if !proxy.username.isEmpty {
             proxyLines.append("  username: \(quoted(proxy.username))")
@@ -214,6 +215,7 @@ public enum ClashVergeProfile {
             payload:
               - name: TS-NATIVE
                 type: reject
+                udp: true
         proxy-groups:
         - name: Proxy
           type: select
