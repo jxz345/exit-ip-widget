@@ -110,6 +110,7 @@ struct DashboardView: View {
             ? AnyLayout(HStackLayout(alignment: .top, spacing: 16))
             : AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
         return VStack(alignment: .leading, spacing: 16) {
+            BackgroundServiceSection(monitor: monitor, installer: daemon)
             notices
             header
             columns {
@@ -171,7 +172,7 @@ struct DashboardView: View {
 
     private var refreshButton: some View {
         Button {
-            Task { await monitor.refresh(force: true) }
+            Task { await monitor.refresh(force: true, bypassMinimumInterval: true, trigger: .manual) }
         } label: {
             Label("Refresh now", systemImage: "arrow.clockwise")
         }
@@ -248,7 +249,7 @@ struct DashboardView: View {
         }
     }
 
-    /// How the app is running: refresh setup, provider rotation, and the optional Tailscale daemon.
+    /// Shared monitoring setup, provider rotation, and optional Tailscale integration.
     private var rightColumn: some View {
         VStack(alignment: .leading, spacing: 16) {
             DashboardGroup("Monitoring") {
@@ -299,7 +300,7 @@ struct DashboardView: View {
         case .coolingDown(let retryNotBefore): "Every enabled provider is paused or out of its daily budget. Lookups resume at \(retryNotBefore.formatted(date: .abbreviated, time: .shortened)); the last verified result stays shown."
         case .providerPaused(let provider, let retryNotBefore): "\(provider.displayName) refused requests (rate limit, quota, or credentials) and is paused until \(retryNotBefore.formatted(date: .abbreviated, time: .shortened)). The next check uses another enabled provider."
         case .waitingForMinimumInterval(let nextAllowed): "A refresh is queued for \(nextAllowed.formatted(date: .omitted, time: .standard)) to honor the 5-second minimum interval."
-        case .waitingForIPinfoToken: "Load or save your IPinfo token in Settings. The last verified result stays shown."
+        case .waitingForIPinfoToken: "Import or save the shared IPinfo token in Settings. The last verified result stays shown."
         case .failed(let message): message
         }
     }
@@ -534,7 +535,7 @@ private struct LaunchAtLoginControl: View {
     @State private var serviceStatus = SMAppService.mainApp.status
     @State private var errorMessage: String?
 
-    private static let explanation = "When enabled, the menu-bar app starts at user login and checks immediately. Later event and manual checks use the 5-second minimum interval."
+    private static let explanation = "Show the menu-bar icon when this account logs in. Shared monitoring starts at boot and continues when this app is closed."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -571,7 +572,7 @@ private struct LaunchAtLoginControl: View {
     }
 
     private var toggle: some View {
-        Toggle("Launch at login", isOn: Binding(
+        Toggle("Show menu-bar app at login", isOn: Binding(
             get: { serviceStatus == .enabled },
             set: { setEnabled($0) }
         ))
@@ -618,7 +619,7 @@ private struct MonitoringSummary: View {
                 VStack(alignment: .leading, spacing: 3) {
                     ForEach(Array(monitor.preferences.providerPool.enumerated()), id: \.offset) { index, provider in
                         Text("\(index + 1). \(provider.displayName)\(providerState(provider))")
-                            .fontWeight(provider == monitor.preferences.provider ? .semibold : .regular)
+                            .fontWeight(provider == monitor.nextProvider ? .semibold : .regular)
                     }
                 }
             }
@@ -637,7 +638,7 @@ private struct MonitoringSummary: View {
 
     private func providerState(_ provider: ProviderID) -> String {
         var notes: [String] = []
-        if provider == monitor.preferences.provider { notes.append("next") }
+        if provider == monitor.nextProvider { notes.append("next") }
         if provider == .ipinfoLite, monitor.isIPinfoTokenUnavailable {
             notes.append("skipped: \(monitor.ipinfoCredentialStatus.lowercased())")
         } else if let pausedUntil = monitor.pausedUntil(provider) {
@@ -652,82 +653,56 @@ private struct MonitoringSummary: View {
     }
 }
 
-/// Always visible: offers installation when missing and repair after incomplete setup.
-/// Reads the provider state every two seconds; the app never sends proxy data to the daemon.
+struct BackgroundServiceSection: View {
+    @ObservedObject var monitor: PublicIPMonitor
+    @ObservedObject var installer: DaemonInstallationModel
+    var body: some View {
+        DashboardGroup("Shared background monitoring") {
+            Label(monitor.connected ? "Service connected" : "Service unavailable", systemImage: monitor.connected ? "checkmark.circle" : "exclamationmark.triangle")
+            Text("Monitoring runs for all users, even after you quit this app. Provider settings and the allowlist require administrator authentication; appearance and dismissals are personal.")
+                .font(.footnote).foregroundStyle(.secondary)
+            if let message = monitor.serviceMessage { Text(message).foregroundStyle(.orange) }
+            if let error = monitor.operationError { Text(error).foregroundStyle(.orange) }
+            if installer.isInstalling { ProgressView("Installing background service…") }
+            else if !monitor.connected {
+                Button(installer.serviceInstalled ? "Repair Service" : "Install Service") { installer.install() }
+            } else if monitor.daemonState?.initialized == false {
+                Button("Use This Account’s Settings") { Task { await monitor.initializeSharedSettings() } }
+                    .disabled(monitor.isChangingSettings)
+                Text("Imports providers, refresh interval, allowlist and quota state once. Import a saved IPinfo token separately in Settings.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if monitor.isChangingSettings { ProgressView("Applying shared settings…") }
+            if let message = installer.message { Text(message).font(.footnote).foregroundStyle(.secondary) }
+        }
+    }
+}
+
 private struct TailscaleVergeProviderSection: View {
     @ObservedObject var installer: DaemonInstallationModel
-
+    @ObservedObject private var monitor = ExitIPAppDelegate.monitor
     var body: some View {
         DashboardGroup("Tailscale → Clash Verge provider") {
-            if installer.isInstalled, let status = installer.status {
-                DetailGrid {
-                    GridRow {
-                        DetailLabel(text: "Status")
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label(status.summary, systemImage: status.isDirect ? "checkmark.circle" : "xmark.octagon")
-                                .foregroundStyle(status.isDirect ? Color.primary : Color.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if let checkedAt = status.checkedAt {
-                                Text("Checked \(checkedAt.formatted(.relative(presentation: .named)))")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    PathRow(label: "Provider file", value: TailscaleVergeProvider.providerFileURL.path) {
-                        Button("Open") { openInTextEdit(TailscaleVergeProvider.providerFileURL) }
-                        Button("Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([TailscaleVergeProvider.providerFileURL])
-                        }
-                    }
-                    PathRow(label: "Served at", value: TailscaleVergeProvider.providerURL.absoluteString) {
-                        Button("Browser") { NSWorkspace.shared.open(TailscaleVergeProvider.providerURL) }
-                        Button("JSON") { NSWorkspace.shared.open(TailscaleVergeProvider.statusURL) }
-                    }
-                    GridRow(alignment: .top) {
-                        DetailLabel(text: "Clash Verge")
-                        // Status only; Apply in Clash Verge has the one Open Clash Verge button.
-                        if ClashVergeApp.url != nil {
-                            Text("Installed")
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        } else {
-                            Text(ClashVergeApp.missingNote)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
+            Toggle("Enable shared provider", isOn: Binding(
+                get: { monitor.daemonState?.settings.tailscaleProviderEnabled == true },
+                set: { monitor.setProviderEnabled($0) }
+            ))
+            .disabled(!monitor.connected || monitor.daemonState?.initialized != true || monitor.isChangingSettings)
+            if let error = monitor.daemonState?.providerError { Text(error).foregroundStyle(.orange) }
+            if let status = monitor.daemonState?.providerStatus {
+                Label(status.summary, systemImage: status.isDirect ? "checkmark.circle" : "xmark.octagon")
+                    .foregroundStyle(status.isDirect ? Color.primary : Color.orange)
+                PathRow(label: "Provider file", value: TailscaleVergeProvider.providerFileURL.path) {
+                    Button("Open") { openInTextEdit(TailscaleVergeProvider.providerFileURL) }
+                    Button("Finder") { NSWorkspace.shared.activateFileViewerSelecting([TailscaleVergeProvider.providerFileURL]) }
                 }
-                GroupCaption("The provider file is never imported: your profile's tailscale-live provider fetches it every 3 seconds.")
-            } else {
-                if installer.monitorInstalled || installer.responderInstalled {
-                    Label("Background provider setup is incomplete", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                } else {
-                    Label("Optional background provider is not installed", systemImage: "info.circle")
-                        .foregroundStyle(.secondary)
+                PathRow(label: "Served at", value: TailscaleVergeProvider.providerURL.absoluteString) {
+                    Button("Browser") { NSWorkspace.shared.open(TailscaleVergeProvider.providerURL) }
+                    Button("JSON") { NSWorkspace.shared.open(TailscaleVergeProvider.statusURL) }
                 }
-                GroupCaption("Exit IP monitoring works without this provider. Install it only to enable Tailscale routing in Clash Verge. Installation requires administrator authentication; your proxy info stays available.")
             }
-
-            if installer.isInstalling {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Installing provider…")
-                }
-            } else if !installer.isInstalled || installer.hasError {
-                Button(installer.hasError ? "Retry Installation" : "Install Provider") {
-                    installer.install()
-                }
-                .buttonStyle(DashboardButtonStyle(prominent: true))
-                .help("macOS will ask for administrator authentication to install the background services.")
-            }
-            if let message = installer.message {
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(installer.hasError ? Color.orange : Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            GroupCaption("The same background service provides the optional Tailscale route for every user. Enabling or disabling it requires administrator authentication. Existing Clash Verge profiles keep the same provider URL.")
+            if ClashVergeApp.url == nil { Text(ClashVergeApp.missingNote).font(.footnote).foregroundStyle(.secondary) }
         }
         .task {
             while !Task.isCancelled {
@@ -764,7 +739,7 @@ struct ClashVergeProfileSection: View {
     var body: some View {
         DashboardGroup("Clash Verge profile") {
             if !providerInstalled {
-                GroupCaption("You can save your proxy info now. Install the background provider before using Tailscale routing.")
+                GroupCaption("You can save your proxy info now. Enable the shared provider before using Tailscale routing.")
             }
             GroupCaption("Proxy info · stored in your Keychain")
             DetailGrid {
@@ -1030,11 +1005,15 @@ struct SettingsView: View {
     @ObservedObject var monitor: PublicIPMonitor
     @State private var ipinfoToken = ""
     @State private var tokenStatus: String?
-    @State private var diagnostics = DiagnosticPreferences()
     @State private var selectedSimulation: PublicIPMonitor.DebugSimulationScenario = .transportFailure
 
     var body: some View {
         Form {
+            Section("Shared service") {
+                Text(monitor.serviceMessage ?? "Connected. Shared settings affect every user and require administrator authentication.")
+                if let error = monitor.operationError { Text(error).foregroundStyle(.orange) }
+                if monitor.isChangingSettings { ProgressView("Applying shared settings…") }
+            }
             Section("Menu bar") {
                 Picker("Display", selection: preferenceBinding(\.menuBarDisplayStyle)) {
                     ForEach(MenuBarDisplayStyle.allCases) { style in
@@ -1063,13 +1042,13 @@ struct SettingsView: View {
                         Text(interval.displayName).tag(interval)
                     }
                 }
-                Text(MonitoringRules.summary(interval: monitor.preferences.refreshInterval) + " A continuing event storm is limited after 30 seconds; follow-up checks wait for the burst budget while new network changes remain prompt. Timer and app/screen/session activation checks skip results under 2 minutes old. Each provider has a 5-second minimum interval.")
+                Text(MonitoringRules.summary(interval: monitor.preferences.refreshInterval) + " A continuing event storm is limited after 30 seconds; follow-up checks wait for the burst budget while new network changes remain prompt. Opening the app reads the current result without another lookup. Each provider has a 5-second minimum interval.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
             Section("IP location service") {
-                Picker("Provider", selection: preferenceBinding(\.provider)) {
+                Picker("Start with", selection: preferenceBinding(\.provider)) {
                     ForEach(ProviderID.allCases) { provider in
                         Text(provider.displayName).tag(provider)
                     }
@@ -1078,18 +1057,18 @@ struct SettingsView: View {
                 // The active provider follows rotation, so offer the token whenever IPinfo Lite is enabled.
                 if preferences.provider == .ipinfoLite || preferences.providerPool.contains(.ipinfoLite) {
                     SecureField("IPinfo Lite token", text: $ipinfoToken)
-                        .disabled(monitor.ipinfoCredentials.isBusy)
+                        .disabled(monitor.isCredentialBusy)
                     HStack {
-                        Button("Load saved token") { Task { await loadToken() } }
+                        Button("Import My Saved Token") { Task { await loadToken() } }
                         Button("Save token") { Task { await saveToken() } }
                             .disabled(ipinfoToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         Button("Remove token", role: .destructive) { Task { await removeToken() } }
                     }
-                    .disabled(monitor.ipinfoCredentials.isBusy)
-                    Text(monitor.ipinfoCredentials.isBusy ? "Waiting for Keychain… Complete any macOS access prompt." : (tokenStatus ?? monitor.ipinfoCredentialStatus))
+                    .disabled(monitor.isCredentialBusy)
+                    Text(monitor.isCredentialBusy ? "Waiting for Keychain… Complete any macOS access prompt." : (tokenStatus ?? monitor.ipinfoCredentialStatus))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    Text("Load once per app session to enable automatic IPinfo monitoring. Keychain is accessed only when you load, save, or remove; the token is never stored in widget data.")
+                    Text("The shared token is stored in the System Keychain and loaded by the daemon at boot. Import reads this account’s old token once; saving or removing the shared token requires administrator authentication.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else if preferences.provider == .ipapiCo {
@@ -1163,19 +1142,21 @@ struct SettingsView: View {
                 Text("Clearing an error removes its message but keeps location hidden until the next successful lookup.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text("Runtime JSON logs are saved in ~/Library/Application Support/ExitIPMonitor/Logs. Set EXIT_IP_LOG_DIRECTORY to choose another folder during development.")
+                Text("Monitoring logs are held by the system service; Event Log includes them alongside this account’s UI events.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Toggle("Include full IP addresses in logs", isOn: Binding(
-                    get: { diagnostics.includeFullIPAddresses },
+                    get: { monitor.diagnosticPreferences.includeFullIPAddresses },
                     set: { value in
+                        var diagnostics = monitor.diagnosticPreferences
                         diagnostics.includeFullIPAddresses = value
                         monitor.applyDiagnosticPreferences(diagnostics)
                     }
                 ))
                 Picker("Log retention", selection: Binding(
-                    get: { diagnostics.retentionDays },
+                    get: { monitor.diagnosticPreferences.retentionDays },
                     set: { value in
+                        var diagnostics = monitor.diagnosticPreferences
                         diagnostics.retentionDays = value
                         monitor.applyDiagnosticPreferences(diagnostics)
                     }
@@ -1184,7 +1165,7 @@ struct SettingsView: View {
                     Text("7 days").tag(7)
                     Text("30 days").tag(30)
                 }
-                Text("IP addresses are redacted by default. Retention is applied when the app starts.")
+                Text("IP addresses are redacted by default. Retention is applied by the background service.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -1218,7 +1199,6 @@ struct SettingsView: View {
         .frame(minWidth: 520, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
         .task {
             if ipinfoToken.isEmpty { ipinfoToken = monitor.ipinfoToken ?? "" }
-            diagnostics = monitor.diagnosticPreferences
         }
     }
 
@@ -1266,22 +1246,23 @@ struct SettingsView: View {
 
     private func loadToken() async {
         if await monitor.loadIPinfoToken() {
-            ipinfoToken = monitor.ipinfoToken ?? ""
+            ipinfoToken = ""
             tokenStatus = monitor.ipinfoCredentialStatus
-        } else if let error = monitor.ipinfoCredentials.errorMessage { tokenStatus = error }
+        } else if let error = monitor.operationError { tokenStatus = error }
     }
 
     private func saveToken() async {
         if await monitor.saveIPinfoToken(ipinfoToken) {
-            tokenStatus = "Saved in Keychain · available for this session"
-        } else if let error = monitor.ipinfoCredentials.errorMessage { tokenStatus = error }
+            ipinfoToken = ""
+            tokenStatus = "Saved in System Keychain · available to background monitoring"
+        } else if let error = monitor.operationError { tokenStatus = error }
     }
 
     private func removeToken() async {
         if await monitor.removeIPinfoToken() {
             ipinfoToken = ""
-            tokenStatus = "Removed from Keychain; IPinfo Lite is skipped until a token is loaded or saved"
-        } else if let error = monitor.ipinfoCredentials.errorMessage { tokenStatus = error }
+            tokenStatus = "Shared token removed; IPinfo Lite is skipped until a token is saved"
+        } else if let error = monitor.operationError { tokenStatus = error }
     }
 
     private func providerHealthSummary(_ provider: ProviderID, record: ProviderHealthRecord) -> String {

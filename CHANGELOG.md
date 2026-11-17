@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Use the section for a version as that release's notes.
 
+## [3.0] - 2026-11-17
+
+Version **3.0 (build 14)** changes monitoring to one system daemon with separate per-user clients.
+
+- Monitoring starts at boot after installation and initial setup, and continues after every UI quits or all users log out.
+- Concurrent macOS users share snapshots, providers, quotas, cooldowns and the allowlist through versioned XPC. Shared changes require administrator authentication and reject stale edits. Appearance, dismissals, login items and proxy profiles remain personal.
+- An explicit first-account migration imports settings, cached results and quota state. IPinfo token import is separate; the daemon stores and loads the shared token in the System Keychain without returning it to clients.
+- The optional Tailscale provider runs in the same native process, replacing the two shell jobs while retaining its endpoint and profile format. Port conflicts are reported without stopping unrelated processes.
+- Widgets query the daemon directly. Clients reconnect after service interruption and show unavailable state while disconnected.
+- Installers copy the signed daemon to a root-owned location, verify XPC readiness, retain state on uninstall/reinstall, and restore previous files after an ordinary in-place repair failure. Packaging prepares an exact-version companion cask.
+
+Automated validation covers shared logic, real anonymous XPC, isolated service state, UI renders, cleanup and rollback fixtures, and universal signed packaging. Live boot/logout, two-account switching, installed-widget access and System Keychain retrieval have not been verified for this release. The environment preflight reports incomplete Xcode first-launch components; the native universal build and direct test suites pass.
+
 ## [2.2] - 2026-10-25
 
 Version **2.2 (build 13)**, built and tested locally without GitHub Actions.

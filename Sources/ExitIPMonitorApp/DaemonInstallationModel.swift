@@ -13,15 +13,16 @@ final class DaemonInstallationModel: ObservableObject {
     @Published private(set) var message: String?
     @Published private(set) var hasError = false
 
-    var isInstalled: Bool { monitorInstalled && responderInstalled }
+    var serviceInstalled: Bool { monitorInstalled }
+    var isInstalled: Bool { serviceInstalled && ExitIPAppDelegate.monitor.daemonState?.settings.tailscaleProviderEnabled == true }
 
     init() { reload() }
 
     func reload() {
-        monitorInstalled = TailscaleVergeProvider.isInstalled()
-        responderInstalled = FileManager.default.fileExists(atPath: TailscaleVergeProvider.responderPlistPath)
-        let text = try? String(contentsOf: TailscaleVergeProvider.stateFileURL, encoding: .utf8)
-        status = monitorInstalled ? TailscaleVergeStatus.evaluate(stateText: text, now: Date()) : nil
+        monitorInstalled = FileManager.default.fileExists(atPath: ExitIPService.plist)
+        responderInstalled = monitorInstalled
+        status = ExitIPAppDelegate.monitor.daemonState?.providerStatus
+
     }
 
     func install() {
@@ -34,7 +35,7 @@ final class DaemonInstallationModel: ObservableObject {
         }
         isInstalling = true
         hasError = false
-        message = "Complete macOS administrator authentication to install the background provider."
+        message = "Complete macOS administrator authentication to install the background service."
         // The setup output is saved here: the outcome check reads it, and the runtime log points to it.
         let logURL = RuntimeLog.shared.directory.appendingPathComponent("daemon-setup-\(UUID().uuidString).log")
         let appleScript = DaemonInstallation.appleScript(scriptPath: script.path, userName: NSUserName())
@@ -43,18 +44,31 @@ final class DaemonInstallationModel: ObservableObject {
             let result = await Task.detached(priority: .userInitiated) {
                 Self.runInstaller(appleScript: appleScript, logURL: logURL)
             }.value
+            var outcome = result.outcome
+            if outcome == .succeeded {
+                outcome = .failed
+                for _ in 0..<5 {
+                    if let response = try? await DaemonRPC.call(DaemonRequest(.state), timeout: 2), let state = response.state,
+                       state.build == "3.0" {
+                        ExitIPAppDelegate.monitor.receive(state)
+                        outcome = .succeeded
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+            }
             reload()
             isInstalling = false
-            switch result.outcome {
+            switch outcome {
             case .succeeded:
-                message = "Background provider installed and both services loaded."
+                message = "Background service installed. Complete shared monitoring setup below."
                 RuntimeLog.shared.info("daemon_install_succeeded", fields: ["log": logURL.path])
             case .cancelled:
-                message = "Installation cancelled. Click Install Provider to try again."
+                message = "Installation cancelled. Click Install Service to try again."
                 RuntimeLog.shared.info("daemon_install_cancelled", fields: ["log": logURL.path])
             case .failed:
                 hasError = true
-                message = "Provider installation did not complete. Click Retry Installation to try again."
+                message = "Service installation did not complete. Click Retry Installation to try again."
                 RuntimeLog.shared.error("daemon_install_failed", fields: ["log": logURL.path])
             }
         }
@@ -81,10 +95,10 @@ final class DaemonInstallationModel: ObservableObject {
             process.standardError = log
             try process.run()
             process.waitUntilExit()
-            let monitorLoaded = process.terminationStatus == 0 && jobLoaded(TailscaleVergeProvider.monitorLabel)
-            let responderLoaded = process.terminationStatus == 0 && jobLoaded(TailscaleVergeProvider.responderLabel)
+            let monitorLoaded = process.terminationStatus == 0 && jobLoaded(ExitIPService.label)
+            let responderLoaded = monitorLoaded
             if process.terminationStatus == 0 && (!monitorLoaded || !responderLoaded) {
-                try log.write(contentsOf: Data("\nVerification failed: both background services must be loaded.\n".utf8))
+                try log.write(contentsOf: Data("\nVerification failed: the background service must be loaded.\n".utf8))
             }
             let output = (try? String(contentsOf: logURL, encoding: .utf8)) ?? "No installer output was available."
             return Result(outcome: DaemonInstallation.outcome(exitStatus: process.terminationStatus,

@@ -13,11 +13,11 @@ public struct MonitorIndicatorState: Codable, Equatable, Sendable {
 }
 
 public final class IndicatorStore: @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStorage
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    public init(defaults: UserDefaults = ExitIPAppGroup.defaults) {
+    public init(defaults: any PreferenceStorage = ExitIPAppGroup.defaults) {
         self.defaults = defaults
     }
 
@@ -40,11 +40,11 @@ public final class IndicatorStore: @unchecked Sendable {
 }
 
 public final class SnapshotStore: @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStorage
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    public init(defaults: UserDefaults = ExitIPAppGroup.defaults) {
+    public init(defaults: any PreferenceStorage = ExitIPAppGroup.defaults) {
         self.defaults = defaults
     }
 
@@ -65,9 +65,9 @@ public final class SnapshotStore: @unchecked Sendable {
 
 /// Persists a provider-specific Retry-After deadline so an app restart cannot accidentally retry early.
 public final class ProviderCooldownStore: @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStorage
 
-    public init(defaults: UserDefaults = ExitIPAppGroup.defaults) {
+    public init(defaults: any PreferenceStorage = ExitIPAppGroup.defaults) {
         self.defaults = defaults
     }
 
@@ -91,9 +91,9 @@ public final class ProviderCooldownStore: @unchecked Sendable {
 /// Persists each provider's most recent lookup attempt so event bursts and app relaunches cannot call
 /// the same provider more often than the hard minimum interval.
 public final class RefreshAttemptStore: @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStorage
 
-    public init(defaults: UserDefaults = ExitIPAppGroup.defaults) {
+    public init(defaults: any PreferenceStorage = ExitIPAppGroup.defaults) {
         self.defaults = defaults
     }
 
@@ -146,11 +146,11 @@ public struct ProviderHealthRecord: Codable, Equatable, Sendable {
 }
 
 public final class ProviderHealthStore: @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStorage
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    public init(defaults: UserDefaults = ExitIPAppGroup.defaults) {
+    public init(defaults: any PreferenceStorage = ExitIPAppGroup.defaults) {
         self.defaults = defaults
     }
 
@@ -187,11 +187,11 @@ public struct DiagnosticPreferences: Codable, Equatable, Sendable {
 }
 
 public final class DiagnosticPreferencesStore: @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStorage
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    public init(defaults: UserDefaults = ExitIPAppGroup.defaults) {
+    public init(defaults: any PreferenceStorage = ExitIPAppGroup.defaults) {
         self.defaults = defaults
     }
 
@@ -228,7 +228,7 @@ public enum RefreshInterval: Int, CaseIterable, Codable, Identifiable, Sendable 
     }
 }
 
-public struct MonitoringPreferences: Equatable, Sendable {
+public struct MonitoringPreferences: Codable, Equatable, Sendable {
     public var provider: ProviderID
     public var providerPool: [ProviderID]
     public var refreshInterval: RefreshInterval
@@ -256,7 +256,7 @@ public struct MonitoringPreferences: Equatable, Sendable {
         self.highlightCountryChanges = highlightCountryChanges
     }
 
-    public static func load(from defaults: UserDefaults = ExitIPAppGroup.defaults) -> MonitoringPreferences {
+    public static func load(from defaults: any PreferenceStorage = ExitIPAppGroup.defaults) -> MonitoringPreferences {
         let provider = ProviderID(rawValue: defaults.string(forKey: ExitIPPreferenceKey.provider) ?? "") ?? .ipapiCo
         let storedPool = (defaults.string(forKey: ExitIPPreferenceKey.providerPool) ?? "")
             .split(separator: ",")
@@ -274,7 +274,7 @@ public struct MonitoringPreferences: Equatable, Sendable {
         )
     }
 
-    public func save(to defaults: UserDefaults = ExitIPAppGroup.defaults) {
+    public func save(to defaults: any PreferenceStorage = ExitIPAppGroup.defaults) {
         defaults.set(provider.rawValue, forKey: ExitIPPreferenceKey.provider)
         defaults.set(providerPool.map(\.rawValue).joined(separator: ","), forKey: ExitIPPreferenceKey.providerPool)
         defaults.set(refreshInterval.rawValue, forKey: ExitIPPreferenceKey.refreshInterval)

@@ -13,7 +13,6 @@ final class ExitIPAppDelegate: NSObject, NSApplicationDelegate {
         installApplicationMenus()
         statusItem = StatusItemController(monitor: Self.monitor)
         Self.monitor.start()
-        TailscaleVergeWatcher.shared.start()
         LaunchDiagnostics.record("startup_services_ready")
         // The app is menu-bar only, and a crowded menu bar can hide its item, so the very first
         // launch opens the dashboard once to show the app is running.

@@ -60,7 +60,7 @@ if codesign -d --entitlements :- "$APP_PATH" >"$entitlements_file" 2>/dev/null &
     # plutil -extract treats dots as key-path separators, so read the array with PlistBuddy.
     app_groups="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups' "$entitlements_file" 2>/dev/null || true)"
     if [[ -z "$app_groups" ]]; then
-        warn "App Group entitlement is missing (expected for ad-hoc builds: the widget cannot read app data)"
+        warn "App Group entitlement is missing (expected for ad-hoc builds; state is read through daemon XPC)"
     elif grep -q 'group.com.example.exitipmonitor' <<<"$app_groups"; then
         warn "App Group entitlement still uses the source-kit placeholder"
     elif grep -q 'group\.' <<<"$app_groups"; then
@@ -70,6 +70,13 @@ if codesign -d --entitlements :- "$APP_PATH" >"$entitlements_file" 2>/dev/null &
     fi
 else
     warn "No readable signed entitlements were found (expected for ad-hoc builds: the app runs unsandboxed)"
+fi
+
+daemon_binary="$APP_PATH/Contents/MacOS/ExitIPMonitorDaemon"
+if [[ -x "$daemon_binary" ]] && codesign --verify --strict "$daemon_binary" >/dev/null 2>&1; then
+    pass "Embedded native daemon signature verifies ($(lipo -archs "$daemon_binary"))"
+else
+    fail "Embedded native daemon is missing or its signature is invalid"
 fi
 
 widget_bundle="$APP_PATH/Contents/PlugIns/ExitIPMonitorWidgets.appex"

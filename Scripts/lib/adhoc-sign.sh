@@ -13,8 +13,8 @@
 # app cannot use the App Group (only a team provisioning profile authorizes one),
 # and its container would be tied to a signature that changes with every build.
 # App extensions must be sandboxed, so the widget keeps its sandbox entitlement
-# without the App Group. As with any build lacking a registered App Group, it
-# cannot read the app's data. --signed-build keeps the full entitlements.
+# without the App Group and retains the exact daemon Mach lookup entitlement.
+# It reads shared state over XPC. --signed-build keeps the full entitlements.
 #
 #   adhoc_sign_app APP_BUNDLE WIDGET_ENTITLEMENTS
 
@@ -37,6 +37,7 @@ adhoc_sign_app() {
             codesign --force --sign - --timestamp=none "$nested" || exit 1
         done < <(find "$app/Contents" \( -name '*.framework' -o -name '*.dylib' \) -prune -print0 2>/dev/null)
 
+        codesign --force --sign - --timestamp=none "$app/Contents/MacOS/ExitIPMonitorDaemon" || exit 1
         if [[ -d "$widget" ]]; then
             codesign --force --sign - --timestamp=none --entitlements "$widget_entitlements" "$widget" || exit 1
         fi

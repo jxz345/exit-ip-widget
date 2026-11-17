@@ -95,7 +95,8 @@ echo 'PASS: generated installer rejects checksum mismatch before replacing the i
 /bin/bash "$REPO/Tests/ExitIPInstallTests/trace_test.sh"
 /bin/bash "$REPO/Tests/ExitIPInstallTests/cleanup_test.sh"
 /bin/bash "$REPO/Tests/ExitIPInstallTests/reinstall_test.sh"
-if [ -n "${EXIT_IP_CASK_PATH:-}" ]; then
+EXIT_IP_CASK_PATH=${EXIT_IP_CASK_PATH:-$REPO/Packaging/exit-ip-monitor.rb.in}
+if [ -n "$EXIT_IP_CASK_PATH" ]; then
     python3 "$REPO/Scripts/sync-homebrew-cleanup.py" --check "$EXIT_IP_CASK_PATH"
     ruby "$REPO/Tests/ExitIPInstallTests/cask_test.rb" "$EXIT_IP_CASK_PATH"
 fi

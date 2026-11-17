@@ -53,7 +53,7 @@ cleanup_find_processes() {
                 *) continue ;;
             esac
         fi
-        [ "$uid" = "$cleanup_uid" ] || {
+        [ "$uid" = "$cleanup_uid" ] || [ "$cleanup_uid" = 0 ] || {
             step_log ERROR "Target app process $pid belongs to user $uid; it was not signalled."
             return 1
         }
@@ -131,12 +131,25 @@ cleanup_job_state() {
 }
 
 cleanup_privileged() {
+    local timeout=10
+    [ "$1" != /Library/PrivilegedHelperTools/com.example.exitipmonitor.manage ] || timeout=90
     if [ "$(/usr/bin/id -u)" = 0 ]; then
-        bounded_command 10 remove-provider "$@"
+        bounded_command "$timeout" remove-provider "$@"
     else
         # Only the existing removal grant is used. Never prompt or create a new grant here.
-        bounded_command 10 remove-provider /usr/bin/sudo -n "$@"
+        bounded_command "$timeout" remove-provider /usr/bin/sudo -n "$@"
     fi
+}
+
+cleanup_remember_provider() {
+    local marker
+    if [ "$cleanup_uid" = 0 ]; then
+        marker=/Library/Preferences/com.example.exitipmonitor.legacy-provider-enabled
+    else
+        marker="$HOME/Library/Application Support/ExitIPMonitor/legacy-provider-enabled"
+        /bin/mkdir -p "$(dirname "$marker")" || return 1
+    fi
+    /usr/bin/touch "$marker"
 }
 
 cleanup_unload_job() {
@@ -217,7 +230,6 @@ cleanup_main() (
     # Retain the lexical absolute path if an old uninstaller already removed the bundle.
     if [ -d "$cleanup_app" ]; then cleanup_app=$(cd "$cleanup_app" && pwd -P) || return 1; fi
     cleanup_uid=$(/usr/bin/id -u)
-    if [ "$cleanup_uid" = 0 ]; then cleanup_uid=$(/usr/bin/stat -f %u /dev/console) || return 1; fi
     cleanup_translocations=""; cleanup_matches=()
     cleanup_label=com.example.exitipmonitor.tailscale-verge
     cleanup_plist="/Library/LaunchDaemons/$cleanup_label.plist"
@@ -225,7 +237,30 @@ cleanup_main() (
     cleanup_support='/Library/Application Support/ExitIPMonitor'
     cleanup_grant=/etc/sudoers.d/exitipmonitor-tailscale-verge
     step_log BEGIN "Clean uninstall preparation: $cleanup_app"
+    local manager=/Library/PrivilegedHelperTools/com.example.exitipmonitor.manage
+    if [ -f "$manager" ]; then
+        # The installed root-owned manager covers every user and preserves machine data.
+        cleanup_privileged "$manager" uninstall || {
+            step_log ERROR "Service cleanup failed. Run sudo '$manager' uninstall, then retry."
+            return 1
+        }
+        cleanup_stop_app || return 1
+        step_log PASS 'Machine service and all installed clients stopped; shared data retained.'
+        return 0
+    fi
+    if [ -d "$cleanup_support/Service" ]; then
+        local service=com.example.exitipmonitor.daemon state=0
+        cleanup_job_state "$service" || state=$?
+        if [ "$state" = 1 ] && [ ! -e "/Library/PrivilegedHelperTools/$service" ] && [ ! -e "/Library/LaunchDaemons/$service.plist" ]; then
+            cleanup_stop_app || return 1
+            step_log PASS 'Service already removed; retained machine data is ready for reinstall.'
+            return 0
+        fi
+        step_log ERROR 'Service manager is missing but installed components remain. Repair the service before uninstalling; shared data was retained.'
+        return 1
+    fi
     cleanup_stop_app || return 1
+    if cleanup_exists "$cleanup_plist" || cleanup_exists "$cleanup_http_plist"; then cleanup_remember_provider || return 1; fi
     cleanup_remove_provider || {
         step_log ERROR "Provider cleanup failed; the app must not be removed or replaced. Use the existing daemon.sh remove command with administrator authentication, then retry."
         return 1

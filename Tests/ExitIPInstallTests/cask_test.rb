@@ -59,18 +59,14 @@ release = [
   ["/usr/bin/xattr", ["-dr", "com.apple.quarantine", staged], {}, []],
 ]
 raise "Preflight must only verify, then release this app's quarantine" unless $capture.preflight.runs == release
-# One privileged step after the app is in place: Apple's bash runs the bundled daemon setup, it is
-# skipped while the user has opted out, and its failure (cancelled password, busy port) never fails
-# the app install.
-provider = [[
+# Installation always offers the required service; old optional-provider opt-out is unrelated.
+service = [[
   "/bin/bash",
   ["{{appdir}}/ExitIPMonitor.app/Contents/Resources/daemon.sh", "install"],
   { sudo: true, must_succeed: false, print_stdout: true },
-  [[:unless_path_exists, "Library/Application Support/ExitIPMonitor/tailscale-verge-off", :home]],
+  [],
 ]]
-unless $capture.postflight.runs == provider
-  raise "Postflight must only set up the provider, skip it after opt-out, and never fail the install"
-end
+raise "Postflight must install the shared service without a legacy opt-out guard" unless $capture.postflight.runs == service
 script = $capture.uninstall_options.fetch(:script)
 raise "Cleanup failure must stop uninstall" unless script.fetch(:must_succeed)
 raise "Whole cleanup must not run as root" if script[:sudo]
@@ -79,5 +75,4 @@ arguments = script.fetch(:args)
 raise "Missing independent cleanup" unless arguments[1].include?('cleanup_main --app "$1"')
 raise "Wrong target" unless arguments.last == "/Applications/ExitIPMonitor.app"
 raise "No graceful quit" unless $capture.uninstall_options[:quit] == "com.example.exitipmonitor"
-puts "PASS: cask releases only the verified staged app's quarantine, sets up the provider unless " \
-     "opted out without failing the install, and requires external cleanup after graceful quit"
+puts "PASS: cask releases only the verified staged app's quarantine, sets up the required shared service without failing the app install, and requires external cleanup after graceful quit"

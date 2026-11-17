@@ -1,3 +1,6 @@
+#if SWIFT_PACKAGE
+import ExitIPShared
+#endif
 import Foundation
 
 /// Small JSON-lines logger for diagnosing refresh lifecycle and provider behavior.
@@ -10,23 +13,28 @@ final class RuntimeLog: @unchecked Sendable {
 
     private let lock = NSLock()
     private let fileURL: URL?
+    private var serviceDiagnostics: DiagnosticPreferences?
+    private var recent = EventLogBuffer(limit: 500)
     /// The folder holding every launch's `runtime-*.jsonl` (time plus PID avoids launch collisions).
     let directory: URL
 
     private init() {
         let fileManager = FileManager.default
         let directory: URL
+        #if EXIT_IP_DAEMON
+        directory = ExitIPService.logDirectory
+        #else
         if let override = ProcessInfo.processInfo.environment["EXIT_IP_LOG_DIRECTORY"], !override.isEmpty {
             directory = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             directory = fileManager.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support/ExitIPMonitor/Logs", isDirectory: true)
         }
+        #endif
         self.directory = directory
 
         do {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-            Self.cleanupOldLogs(in: directory, retentionDays: DiagnosticPreferencesStore().load().retentionDays)
             let stamp = ISO8601DateFormatter().string(from: .now)
                 .replacingOccurrences(of: ":", with: "-")
             let url = directory.appendingPathComponent("runtime-\(stamp)-\(ProcessInfo.processInfo.processIdentifier).jsonl")
@@ -35,7 +43,28 @@ final class RuntimeLog: @unchecked Sendable {
         } catch {
             fileURL = nil
         }
+        // Bound startup I/O while retaining useful history after a daemon restart.
+        for file in logFiles().suffix(4) {
+            guard let handle = try? FileHandle(forReadingFrom: file) else { continue }
+            defer { try? handle.close() }
+            let size = (try? handle.seekToEnd()) ?? 0
+            try? handle.seek(toOffset: size > 262144 ? size - 262144 : 0)
+            if let data = try? handle.read(upToCount: 262144), let text = String(data: data, encoding: .utf8) {
+                recent.append(jsonLines: text)
+            }
+        }
     }
+
+    func configure(_ preferences: DiagnosticPreferences) {
+        let changed = lock.withLock {
+            let changed = serviceDiagnostics != preferences
+            serviceDiagnostics = preferences
+            return changed
+        }
+        if changed { Self.cleanupOldLogs(in: directory, retentionDays: preferences.retentionDays) }
+    }
+
+    func recentLines() -> [String] { lock.withLock { recent.lines } }
 
     func info(_ event: String, fields: [String: String] = [:]) {
         write(level: "info", event: event, fields: fields)
@@ -47,7 +76,7 @@ final class RuntimeLog: @unchecked Sendable {
 
     private func write(level: String, event: String, fields: [String: String]) {
         guard let fileURL else { return }
-        let preferences = DiagnosticPreferencesStore().load()
+        let preferences = lock.withLock { serviceDiagnostics } ?? DiagnosticPreferencesStore().load()
         let safeFields = fields.mapValues { value in
             preferences.includeFullIPAddresses ? value : LogRedactor.redactIPAddresses(in: value)
         }
@@ -64,6 +93,7 @@ final class RuntimeLog: @unchecked Sendable {
         line.append("\n")
 
         lock.lock()
+        _ = recent.append(timestamp: timestamp, event: event, fields: safeFields)
         if let handle = try? FileHandle(forWritingTo: fileURL) {
             _ = try? handle.seekToEnd()
             _ = try? handle.write(contentsOf: Data(line.utf8))

@@ -1,10 +1,11 @@
 import SwiftUI
 import WidgetKit
 
-struct ExitIPWidgetEntry: TimelineEntry {
+struct ExitIPWidgetEntry: TimelineEntry, Sendable {
     let date: Date
     let snapshot: ExitIPSnapshot?
     let indicators: MonitorIndicatorState
+    var refreshInterval: RefreshInterval = .fifteenMinutes
 }
 
 struct ExitIPWidgetTimelineProvider: TimelineProvider {
@@ -26,15 +27,18 @@ struct ExitIPWidgetTimelineProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (ExitIPWidgetEntry) -> Void) {
-        completion(ExitIPWidgetEntry(date: .now, snapshot: SnapshotStore().load(), indicators: IndicatorStore().load()))
+        if context.isPreview { completion(placeholder(in: context)); return }
+        let reply = WidgetReply(completion)
+        Task { reply.finish(await WidgetServiceState.entry()) }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<ExitIPWidgetEntry>) -> Void) {
-        let entry = ExitIPWidgetEntry(date: .now, snapshot: SnapshotStore().load(), indicators: IndicatorStore().load())
-        // The containing app reloads immediately only for material IP/location/alert changes.
-        // A modest hourly timeline updates the shared snapshot and relative-age text without consuming a reload for every check.
-        let refreshAt = entry.date.addingTimeInterval(RefreshPolicy.widgetTimelineRefresh)
-        completion(Timeline(entries: [entry], policy: .after(refreshAt)))
+        let reply = WidgetReply(completion)
+        Task {
+            let entry = await WidgetServiceState.entry()
+            let refreshAt = entry.date.addingTimeInterval(RefreshPolicy.widgetTimelineRefresh)
+            reply.finish(Timeline(entries: [entry], policy: .after(refreshAt)))
+        }
     }
 }
 
@@ -69,7 +73,7 @@ private struct ExitIPWidgetView: View {
                     small(snapshot)
                 }
             } else {
-                ContentUnavailableView("No exit IP", systemImage: "network", description: Text("Open Exit IP to run the first check."))
+                ContentUnavailableView("No exit IP", systemImage: "network", description: Text("Open Exit IP to set up the background service."))
             }
         }
         .containerBackground(for: .widget) {
@@ -78,7 +82,7 @@ private struct ExitIPWidgetView: View {
     }
 
     private func small(_ snapshot: ExitIPSnapshot) -> some View {
-        let staleThreshold = Double(MonitoringPreferences.load().refreshInterval.rawValue * 2)
+        let staleThreshold = Double(entry.refreshInterval.rawValue * 2)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(snapshot.countryFlag)
@@ -108,7 +112,7 @@ private struct ExitIPWidgetView: View {
     }
 
     private func medium(_ snapshot: ExitIPSnapshot) -> some View {
-        let staleThreshold = Double(MonitoringPreferences.load().refreshInterval.rawValue * 2)
+        let staleThreshold = Double(entry.refreshInterval.rawValue * 2)
         return HStack(alignment: .top, spacing: 14) {
             Text(snapshot.countryFlag)
                 .font(.system(size: 42))
@@ -151,4 +155,29 @@ private struct ExitIPWidgetView: View {
         }
         .padding()
     }
+}
+
+/// Each extension fetches the machine state in its own user context. Its cache is only for outages.
+enum WidgetServiceState {
+    static func entry() async -> ExitIPWidgetEntry {
+        do {
+            guard let state = try await DaemonRPC.call(DaemonRequest(.state), timeout: 2).state else { throw DaemonFailure.unavailable }
+            if let data = try? JSONEncoder().encode(state) { UserDefaults.standard.set(data, forKey: "daemon.widget-cache") }
+            return ExitIPWidgetEntry(date: .now, snapshot: state.presentedSnapshot,
+                                     indicators: state.initialized ? state.presentedIndicators : .init(errorMessage: "Set up shared monitoring in Exit IP", suppressLocation: true),
+                                     refreshInterval: state.settings.refreshInterval)
+        } catch {
+            let cached = UserDefaults.standard.data(forKey: "daemon.widget-cache").flatMap { try? JSONDecoder().decode(DaemonState.self, from: $0) }
+            return ExitIPWidgetEntry(date: .now, snapshot: cached?.presentedSnapshot,
+                                     indicators: .init(errorMessage: "Background service unavailable; cached data is stale", suppressLocation: true),
+                                     refreshInterval: cached?.settings.refreshInterval ?? .fifteenMinutes)
+        }
+    }
+}
+
+/// WidgetKit's legacy callbacks aren't annotated Sendable. Each immutable callback is transferred
+/// once to the fetch task and invoked exactly once, never read concurrently by another task.
+private struct WidgetReply<Value>: @unchecked Sendable {
+    let finish: (Value) -> Void
+    init(_ finish: @escaping (Value) -> Void) { self.finish = finish }
 }

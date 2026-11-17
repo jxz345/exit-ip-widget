@@ -1,46 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Records what Clash is served by the Tailscale → Clash Verge daemon, but only when it changes. The
-/// daemon rewrites its state every 2 seconds; a record is written for a different served value
-/// (Direct↔Reject, another utun, another reason), never for a routine rewrite.
-@MainActor
-final class TailscaleVergeWatcher {
-    static let shared = TailscaleVergeWatcher()
-
-    private var timer: Timer?
-    private var lastRecorded: TailscaleVergeStatus.Served?
-
-    func start() {
-        guard timer == nil else { return }
-        check()
-        let timer = Timer(timeInterval: 3, repeats: true) { _ in
-            MainActor.assumeIsolated { TailscaleVergeWatcher.shared.check() }
-        }
-        timer.tolerance = 1
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-    }
-
-    private func check() {
-        guard TailscaleVergeProvider.isInstalled() else {
-            lastRecorded = nil
-            return
-        }
-        let text = try? String(contentsOf: TailscaleVergeProvider.stateFileURL, encoding: .utf8)
-        let served = TailscaleVergeStatus.evaluate(stateText: text, now: Date()).served
-        guard let change = TailscaleVergeChange.next(previous: lastRecorded, current: served) else { return }
-        lastRecorded = change
-        RuntimeLog.shared.info("tailscale_provider_changed", fields: TailscaleVergeChange.logFields(change))
-    }
-}
-
 /// The Event Log window's lines: history from the log files when it opens, then live records.
 @MainActor
 final class EventLogModel: ObservableObject {
     @Published private(set) var lines: [String] = []
     private var buffer = EventLogBuffer(limit: 500)
     private var observer: NSObjectProtocol?
+    private var serviceEvents: [String] = []
+    private var polling: Task<Void, Never>?
 
     func start() {
         guard observer == nil else { return }
@@ -52,6 +20,15 @@ final class EventLogModel: ObservableObject {
         }
         buffer = history
         lines = buffer.lines
+        polling = Task { [weak self] in
+            while !Task.isCancelled {
+                if let response = try? await DaemonRPC.call(DaemonRequest(.events)), let events = response.events {
+                    self?.serviceEvents = events
+                    self?.updateLines()
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
         observer = NotificationCenter.default.addObserver(forName: RuntimeLog.recordWritten, object: nil, queue: .main) { note in
             let timestamp = note.userInfo?["timestamp"] as? String
             let event = note.userInfo?["event"] as? String
@@ -63,9 +40,13 @@ final class EventLogModel: ObservableObject {
         }
     }
 
+    private func updateLines() {
+        lines = Array((serviceEvents + buffer.lines).sorted().suffix(500))
+    }
+
     func append(timestamp: String, event: String, fields: [String: String]) {
         if buffer.append(timestamp: timestamp, event: event, fields: fields) {
-            lines = buffer.lines
+            updateLines()
         }
     }
 }

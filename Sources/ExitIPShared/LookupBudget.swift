@@ -233,7 +233,7 @@ public enum RefreshGate {
         case allProvidersPaused(until: Date)
     }
 
-    /// - Parameter bypassLimits: startup's one-time exception to the gap and the burst allowance.
+    /// - Parameter bypassLimits: bypass the gap and burst allowance for startup, Refresh now or provider Test.
     public static func decide(
         urgency: RefreshUrgency,
         pool: [ProviderID],
@@ -324,9 +324,9 @@ public struct PendingRefresh: Equatable, Sendable {
 
 /// Persists `LookupBudget` in the App Group so relaunches cannot reset the burst allowance or daily counts.
 public final class LookupBudgetStore: @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStorage
 
-    public init(defaults: UserDefaults = ExitIPAppGroup.defaults) {
+    public init(defaults: any PreferenceStorage = ExitIPAppGroup.defaults) {
         self.defaults = defaults
     }
 

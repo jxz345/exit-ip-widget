@@ -265,8 +265,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    MARKETING_VERSION: "2.2"
-    CURRENT_PROJECT_VERSION: "13"
+    MARKETING_VERSION: "3.0"
+    CURRENT_PROJECT_VERSION: "14"
 targets:
   ExitIPMonitor:
     type: application
@@ -275,9 +275,10 @@ targets:
     sources:
       - path: Sources/ExitIPShared
       - path: Sources/ExitIPMonitorApp
-      # The optional Tailscale → Clash Verge daemon ships as bundle resources:
+      - path: Sources/ExitIPCore/RuntimeLog.swift
+      # Installer for the required shared service ships as a bundle resource:
       # sudo /bin/bash ExitIPMonitor.app/Contents/Resources/daemon.sh install
-      - path: Sources/ExitIPDaemon
+      - path: Sources/ExitIPDaemon/daemon.sh
         buildPhase: resources
       - path: Sources/ExitIPDiagnostics
         buildPhase: resources
@@ -290,7 +291,12 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Configuration/ExitIPMonitor.entitlements
         CODE_SIGN_STYLE: Automatic
 $TEAM_SETTING
+    postBuildScripts:
+      - name: Embed background service
+        script: /bin/cp "\${BUILT_PRODUCTS_DIR}/ExitIPMonitorDaemon" "\${TARGET_BUILD_DIR}/\${EXECUTABLE_FOLDER_PATH}/ExitIPMonitorDaemon"
+        basedOnDependencyAnalysis: false
     dependencies:
+      - target: ExitIPMonitorDaemon
       - target: ExitIPMonitorWidgets
         embed: true
         codeSign: true
@@ -302,6 +308,28 @@ $TEAM_SETTING
       - sdk: WidgetKit.framework
     scheme:
       gatherCoverageData: false
+
+  ExitIPMonitorDaemon:
+    type: tool
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/ExitIPShared
+      - path: Sources/ExitIPCore
+      - path: Sources/ExitIPService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.exitipmonitor.daemon
+        PRODUCT_NAME: ExitIPMonitorDaemon
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "\$(inherited) EXIT_IP_DAEMON"
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_STYLE: Automatic
+$TEAM_SETTING
+    dependencies:
+      - sdk: Network.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: IOKit.framework
 
   ExitIPMonitorWidgets:
     type: app-extension

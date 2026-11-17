@@ -30,6 +30,7 @@ scenario() (
         partial) touch "$work/plist" "$work/support" "$work/grant" ;;
     esac
     cleanup_pause() { :; }
+    cleanup_remember_provider() { touch "$work/migration-marker"; }
     cleanup_process_table() {
         local reads
         reads=$(cat "$work/reads"); echo "$((reads + 1))" > "$work/reads"

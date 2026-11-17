@@ -55,6 +55,7 @@ adhoc_sign_app "$APP_BUNDLE" "$PROJECT_DIR/Configuration/ExitIPMonitorWidgets.en
 
 for binary in \
     "$APP_BUNDLE/Contents/MacOS/ExitIPMonitor" \
+    "$APP_BUNDLE/Contents/MacOS/ExitIPMonitorDaemon" \
     "$APP_BUNDLE/Contents/PlugIns/ExitIPMonitorWidgets.appex/Contents/MacOS/ExitIPMonitorWidgets"; do
     archs="$(lipo -archs "$binary")"
     if [[ " $archs " != *" arm64 "* || " $archs " != *" x86_64 "* ]]; then
@@ -172,3 +173,10 @@ printf '  version "%s"\n  sha256 "%s"\n' "$version" "$(shasum -a 256 "$zip_path"
 if [[ "${CI:-}" != "true" ]]; then
     printf 'Artifacts built locally. Nothing was published and no workflow was invoked.\n'
 fi
+
+# Prepare the companion tap update with exact artifact metadata; do not publish it here.
+zip_sha="$(shasum -a 256 "$zip_path" | awk '{print $1}')"
+sed -e "s|@VERSION@|$version|g" -e "s|@ZIP_SHA256@|$zip_sha|g" \
+    "$KIT_ROOT/Packaging/exit-ip-monitor.rb.in" > "$DIST_DIR/exit-ip-monitor.rb"
+python3 "$SCRIPT_DIR/sync-homebrew-cleanup.py" "$DIST_DIR/exit-ip-monitor.rb"
+printf 'Prepared Homebrew cask: %s\n' "$DIST_DIR/exit-ip-monitor.rb"

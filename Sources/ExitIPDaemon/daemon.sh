@@ -1,411 +1,229 @@
 #!/bin/bash
-# daemon.sh: install or remove Exit IP Monitor's optional Tailscale → Clash Verge provider, two
-# LaunchDaemons that keep http://127.0.0.1:18766/provider.yaml bound to the current native
-# Tailscale utun (see tailscale-verge.sh and README → Tailscale → Clash Verge provider).
-#   sudo /bin/bash daemon.sh install   report whether Tailscale and Clash Verge Rev are present, copy
-#                                      the script to a root-owned location, load the monitor, add
-#                                      the removal grant, stop whatever holds port 18766, then load
-#                                      the socket-activated responder
-#   sudo /bin/bash daemon.sh remove    unload both, delete their files and the grant, and remember
-#                                      the choice so Homebrew reinstalls don't turn it back on
-#   /bin/bash daemon.sh status         show what is installed and the current state (no root needed)
-# App installation and reinstallation never run `install`. Setup requires the dashboard's
-# Install Provider action or this explicit command. Without Tailscale it serves Reject.
-# The script is copied out of the source folder or app bundle on purpose: launchd must never run
-# root code from a location the user can modify.
-# Exit status: 0 done, 1 error, 2 usage, 3 monitor installed but port 18766 could not be freed
-# (the responder was not installed).
+# Install one boot-started Exit IP service. No networking settings are changed here.
+# install: administrator-only; uninstall/remove: stop service/clients, keep all user and machine data.
+# The root-owned copy permits only the fixed uninstall command through the removal grant.
 set -uo pipefail
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
-
-LABEL="com.example.exitipmonitor.tailscale-verge"
-HTTP_LABEL="$LABEL-http"
+LABEL=com.example.exitipmonitor.daemon
+LEGACY=com.example.exitipmonitor.tailscale-verge
+DIR='/Library/Application Support/ExitIPMonitor'
+EXECUTABLE="/Library/PrivilegedHelperTools/$LABEL"
+MANAGER="/Library/PrivilegedHelperTools/com.example.exitipmonitor.manage"
 PLIST="/Library/LaunchDaemons/$LABEL.plist"
-HTTP_PLIST="/Library/LaunchDaemons/$HTTP_LABEL.plist"
-DIR="/Library/Application Support/ExitIPMonitor"
-SCRIPT="$DIR/tailscale-verge.sh"
-STATE_DIR="$DIR/TailscaleVerge"
-INSTALL_OWNER="-o root -g wheel"   # tests clear it to copy into a temporary folder
-PORT=18766
-# Lets `brew uninstall` remove the daemon without a password (see grant_line); like Sleepless's grant.
-GRANT="/etc/sudoers.d/exitipmonitor-tailscale-verge"
-# Written in the user's home by `remove`, deleted by `install` (as the user, never as root); the
-# legacy casks use this marker; current app installs always leave the provider uninstalled.
-OPT_OUT="Library/Application Support/ExitIPMonitor/tailscale-verge-off"
-TAILSCALE_APP="/Applications/Tailscale.app"
-TAILSCALE_CLI="$TAILSCALE_APP/Contents/MacOS/Tailscale"
-CLASH_VERGE_APP="/Applications/Clash Verge.app"
+GRANT=/etc/sudoers.d/exitipmonitor-service
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/command-support.sh" ]; then
     source "$SCRIPT_DIR/command-support.sh"
-else
+elif [ -f "$SCRIPT_DIR/../ExitIPDiagnostics/command-support.sh" ]; then
     source "$SCRIPT_DIR/../ExitIPDiagnostics/command-support.sh"
+else
+    source "$DIR/command-support.sh"
 fi
+run() { bounded_command 20 "$1" "$@"; }
+require_root() { [ "$(/usr/bin/id -u)" = 0 ] || { echo 'Administrator authentication is required.' >&2; return 1; }; }
 
-run() { bounded_command 20 "${1##*/} ${2:-}" "$@"; }
-
-# Succeeds when something accepts connections on 127.0.0.1:PORT. connect() rather than bind():
-# on macOS a SO_REUSEADDR bind to 127.0.0.1 succeeds over another process's wildcard listener.
-port_accepts() {
-    local port=${1:-$PORT} pid ticks=0
-    ( exec 3<> "/dev/tcp/127.0.0.1/$port" ) 2>/dev/null &
-    pid=$!
-    while /bin/kill -0 "$pid" 2>/dev/null; do
-        if [ "$ticks" -ge 10 ]; then
-            /bin/kill -KILL "$pid" 2>/dev/null
-            wait "$pid" 2>/dev/null
-            return 0    # neither accepted nor refused within 1 s: treat as occupied
-        fi
-        /bin/sleep 0.1
-        ticks=$((ticks + 1))
-    done
-    wait "$pid"
-}
-
-# bootout returns before launchd finishes removing the job; an immediate bootstrap then fails
-# with "5: Input/output error", so wait until `launchctl print` no longer finds it.
-BOOTOUT_TICKS=100   # 0.2 s each
-bootout_target() {
-    local target=$1 ticks=0 started=$SECONDS status=0
-    step_log BEGIN "Unload $target"
-    run /bin/launchctl bootout "$target" >/dev/null 2>&1 || status=$?
-    if [ "$status" = 124 ]; then
-        step_log ERROR "Timed out unloading $target"
-        return 1
+# Never install executable code through a symlink or into a user-writable directory.
+secure_directory() {
+    local path=$1
+    [ ! -L "$path" ] || { echo "Refusing symlink: $path" >&2; return 1; }
+    if [ -e "$path" ]; then
+        [ -d "$path" ] && [ "$(/usr/bin/stat -f %u "$path")" = 0 ] || return 1
+    else
+        /bin/mkdir "$path" || return 1
     fi
-    while true; do
-        status=0
-        run /bin/launchctl print "$target" >/dev/null 2>&1 || status=$?
-        if [ "$status" = 124 ]; then
-            step_log ERROR "Timed out inspecting $target"
-            return 1
-        fi
-        [ "$status" = 0 ] || break
-        if [ "$ticks" -ge "$BOOTOUT_TICKS" ] || [ "$((SECONDS - started))" -ge 20 ]; then
-            echo "error: launchd did not unload $target within 20 seconds." >&2
-            return 1
-        fi
-        /bin/sleep 0.2
-        ticks=$((ticks + 1))
-    done
-    step_log END "Unloaded $target"
+    /usr/sbin/chown root:wheel "$path" && /bin/chmod 0755 "$path"
 }
 
-bootout_wait() { bootout_target "system/$1"; }
-
-# listener_pids PORT: processes listening on TCP PORT on any address. launchd itself (pid 1, which
-# holds the sockets of socket-activated jobs) and this script are never listed.
-listener_pids() {
-    local pid
-    for pid in $(/usr/sbin/lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | /usr/bin/sort -un); do
-        [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" -gt 1 ] && [ "$pid" != "$$" ] && echo "$pid"
-    done
+service_plist() {
+    cat <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>$LABEL</string>
+<key>ProgramArguments</key><array><string>$EXECUTABLE</string></array>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><true/>
+<key>ThrottleInterval</key><integer>10</integer>
+<key>ExitTimeOut</key><integer>10</integer>
+<key>ProcessType</key><string>Background</string>
+<key>MachServices</key><dict><key>$LABEL</key><true/></dict>
+</dict></plist>
+PLIST
 }
 
-# launchd_job PID: prints DOMAIN/LABEL when PID is the main process of a launchd job, whose
-# KeepAlive would restart it after a plain kill. launchd names the job in XPC_SERVICE_NAME, but
-# children inherit that variable, so the job's own pid must match as well.
-launchd_job() {
-    local pid=$1 label uid domain domains
-    label=$(/bin/ps -E -ww -o command= -p "$pid" 2>/dev/null | /usr/bin/tr ' ' '\n' |
-        /usr/bin/sed -n 's/^XPC_SERVICE_NAME=//p' | /usr/bin/head -1)
-    [[ "$label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [ "$label" != 0 ] || return 1
-    uid=$(/bin/ps -o uid= -p "$pid" 2>/dev/null | /usr/bin/tr -d ' ')
-    [[ "$uid" =~ ^[0-9]+$ ]] || return 1
-    if [ "$uid" = 0 ]; then domains="system"; else domains="gui/$uid user/$uid"; fi
-    for domain in $domains; do
-        if [ "$(run /bin/launchctl print "$domain/$label" 2>/dev/null |
-                /usr/bin/awk '$1 == "pid" && $2 == "=" { print $3; exit }')" = "$pid" ]; then
-            echo "$domain/$label"
-            return 0
-        fi
+job_state() {
+    local output result=0
+    output=$(run /bin/launchctl print "system/$1" 2>&1) || result=$?
+    [ "$result" != 0 ] || return 0
+    if [ "$result" = 113 ] && [[ "$output" == *'Could not find service'* ]]; then return 1; fi
+    echo "Could not inspect system/$1: $output" >&2
+    return 2
+}
+
+unload() {
+    local label=$1 state=0 ticks=0
+    job_state "$label" || state=$?
+    [ "$state" != 1 ] || return 0
+    [ "$state" = 0 ] || return 1
+    run /bin/launchctl bootout "system/$label" || return 1
+    while [ "$ticks" -lt 100 ]; do
+        state=0; job_state "$label" || state=$?
+        [ "$state" != 1 ] || return 0
+        [ "$state" = 0 ] || return 1
+        /bin/sleep 0.2; ticks=$((ticks + 1))
     done
+    echo "Service did not unload: $label" >&2
     return 1
 }
 
-# stop_port_holders PORT: stops whatever listens on PORT so the responder can own it. A launchd
-# job is disabled and booted out, so it is not started again (at login, at boot, or by
-# KeepAlive); the command that allows it again is printed. Any other process gets TERM, then
-# KILL after 5 seconds. Apple's own jobs are never stopped. Fails if the port is still in use.
-stop_port_holders() {
-    local port=$1 pid job command ticks
-    for pid in $(listener_pids "$port"); do
-        command=$(/bin/ps -o comm= -p "$pid" 2>/dev/null)
-        if job=$(launchd_job "$pid"); then
-            case "$job" in
-                */com.apple.*) echo "error: port $port is held by Apple's $job; it is not stopped." >&2; return 1 ;;
+# Both operations use the same atomic PID lock. An interrupted install leaves its
+# backup under Service; ordinary failures restore the previous executable and launch job.
+service_lock() {
+    [ ! -L "$DIR/Service" ] || return 1
+    [ ! -e "$DIR/Service" ] || [ "$(/usr/bin/stat -f %u "$DIR/Service")" = 0 ] || return 1
+    /usr/bin/install -d -o root -g wheel -m 0700 "$DIR/Service" || return 1
+    /usr/bin/shlock -p $$ -f "$DIR/Service/install.lock" || { echo 'Another service operation is active.' >&2; return 1; }
+}
+
+wait_legacy_workers() {
+    local table pid command found ticks=0
+    while [ "$ticks" -lt 100 ]; do
+        table=$(run /bin/ps -axo pid=,command=) || return 1
+        [ -n "$table" ] || return 1
+        found=0
+        while read -r pid command; do
+            case "$command" in
+                "/bin/bash $DIR/tailscale-verge.sh monitor"*|"/bin/bash $DIR/tailscale-verge.sh http"*) found=1 ;;
             esac
-            echo "Stopping launchd job $job (pid $pid, $command), which holds port $port, and disabling it."
-            echo "  To allow it again: sudo launchctl enable $job"
-            run /bin/launchctl disable "$job" >/dev/null 2>&1 || true
-            bootout_target "$job" || return 1
-        fi
-        if /bin/kill -0 "$pid" 2>/dev/null; then
-            echo "Stopping pid $pid ($command), which holds port $port."
-            /bin/kill -TERM "$pid" 2>/dev/null
-            ticks=0
-            while /bin/kill -0 "$pid" 2>/dev/null && [ "$ticks" -lt 50 ]; do
-                /bin/sleep 0.1
-                ticks=$((ticks + 1))
-            done
-            /bin/kill -KILL "$pid" 2>/dev/null || true
-        fi
+        done <<< "$table"
+        [ "$found" = 1 ] || return 0
+        /bin/sleep 0.2; ticks=$((ticks + 1))
     done
-    ticks=0
-    while port_accepts "$port"; do
-        [ "$ticks" -lt 25 ] || return 1
-        /bin/sleep 0.2
-        ticks=$((ticks + 1))
-    done
+    echo 'Legacy provider workers did not exit; service replacement stopped.' >&2
+    return 1
 }
 
-# first_check SINCE: waits up to 10 s for a monitor pass that finished at or after SINCE and prints it.
-first_check() {
-    local since=$1 ticks=0 checked
-    while [ "$ticks" -lt 50 ]; do
-        checked=$(/usr/bin/sed -n 's/^checked=//p' "$STATE_DIR/state" 2>/dev/null)
-        if [[ "$checked" =~ ^[0-9]+$ ]] && [ "$checked" -ge "$since" ]; then
-            echo "Monitor's first check: $(/usr/bin/grep -E '^(state|interface|reason)=' "$STATE_DIR/state" | /usr/bin/paste -sd ' ' -)"
-            return 0
-        fi
-        /bin/sleep 0.2
-        ticks=$((ticks + 1))
-    done
-    echo "warning: the monitor has not completed a check yet; see: daemon.sh status" >&2
-}
-
-# target_user: the login user the grant and opt-out marker belong to. SUDO_USER (set by Homebrew's
-# sudo step and by manual sudo), else the console user; never root.
-target_user() {
-    local user=${SUDO_USER:-}
-    if [ -z "$user" ] || [ "$user" = root ]; then
-        user=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || true)
-    fi
-    [[ "$user" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$user" != root ] && [ "$user" != loginwindow ] || return 1
-    /usr/bin/id -u "$user" >/dev/null 2>&1 || return 1
-    printf '%s\n' "$user"
-}
-
-user_home() {
-    /usr/bin/dscl . -read "/Users/$1" NFSHomeDirectory 2>/dev/null | /usr/bin/awk 'NR == 1 { print $2 }'
-}
-
-# set_opt_out USER on|off: create or delete the opt-out marker as that user, so a symlink in the
-# home folder can never redirect a root write.
-set_opt_out() {
-    local user=$1 state=$2 home
-    home=$(user_home "$user")
-    [[ "$home" == /* ]] || return 1
-    if [ "$state" = on ]; then
-        run /usr/bin/sudo -n -u "$user" -- /bin/mkdir -p "$home/${OPT_OUT%/*}" &&
-            run /usr/bin/sudo -n -u "$user" -- /usr/bin/touch "$home/$OPT_OUT"
-    else
-        run /usr/bin/sudo -n -u "$user" -- /bin/rm -f "$home/$OPT_OUT"
-    fi
-}
-
-# grant_line USER: exactly the commands `brew uninstall` needs to remove the daemon (and a restart).
-# sudoers matches arguments literally, so nothing else is permitted; the plists are root-owned, so
-# nothing can be loaded or started through it.
-grant_line() {
-    printf '%s ALL=(root) NOPASSWD: /bin/launchctl bootout system/%s, /bin/launchctl bootout system/%s, /bin/launchctl kickstart -k system/%s, /bin/rm -f %s, /bin/rm -f %s, /bin/rm -rf %s, /bin/rm -f %s\n' \
-        "$1" "$LABEL" "$HTTP_LABEL" "$LABEL" "$PLIST" "$HTTP_PLIST" "${DIR// /\\ }" "$GRANT"
-}
-
-install_grant() {
-    local tmp status
-    tmp=$(/usr/bin/mktemp) || return 1
-    grant_line "$1" > "$tmp"
-    if ! /usr/sbin/visudo -cf "$tmp" >/dev/null 2>&1; then
-        /bin/rm -f "$tmp"
-        echo "error: the removal grant failed sudoers validation; it was not installed." >&2
-        return 1
-    fi
-    # shellcheck disable=SC2086 # INSTALL_OWNER is deliberately split into options
-    /usr/bin/install -m 0440 $INSTALL_OWNER "$tmp" "$GRANT"
-    status=$?
-    /bin/rm -f "$tmp"
-    return "$status"
-}
-
-# preflight_report: what the provider depends on. Never fatal: without Tailscale the daemon serves
-# Reject (reason tailscale-not-installed); without Clash Verge Rev nothing uses it yet.
-preflight_report() {
-    if [ -x "$TAILSCALE_CLI" ]; then
-        echo "Tailscale: installed."
-    else
-        echo "Tailscale: not installed (expected $TAILSCALE_APP). The provider serves Reject until Tailscale is installed and connected."
-    fi
-    if [ -d "$CLASH_VERGE_APP" ]; then
-        echo "Clash Verge Rev: installed."
-    else
-        echo "Clash Verge Rev: not installed (expected $CLASH_VERGE_APP). Nothing uses the provider until you install it and import the profile shown in Exit IP's dashboard."
-    fi
-}
-
-monitor_plist() {
-    cat <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>            <string>$LABEL</string>
-    <key>ProgramArguments</key> <array><string>/bin/bash</string><string>$SCRIPT</string><string>monitor</string></array>
-    <key>RunAtLoad</key>        <true/>
-    <key>KeepAlive</key>        <true/>
-    <key>ThrottleInterval</key> <integer>5</integer>
-    <key>ProcessType</key>      <string>Background</string>
-</dict>
-</plist>
-PLIST
-}
-
-# launchd owns the loopback socket and runs one responder per connection (inetd style) as nobody.
-http_plist() {
-    cat <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>              <string>$HTTP_LABEL</string>
-    <key>ProgramArguments</key>   <array><string>/bin/bash</string><string>$SCRIPT</string><string>http</string></array>
-    <key>UserName</key>           <string>nobody</string>
-    <key>GroupName</key>          <string>nobody</string>
-    <key>inetdCompatibility</key> <dict><key>Wait</key><false/></dict>
-    <key>Sockets</key>
-    <dict>
-        <key>Listener</key>
-        <dict>
-            <key>SockNodeName</key>    <string>127.0.0.1</string>
-            <key>SockServiceName</key> <string>$PORT</string>
-            <key>SockFamily</key>      <string>IPv4</string>
-            <key>SockType</key>        <string>stream</string>
-        </dict>
-    </dict>
-</dict>
-</plist>
-PLIST
-}
-
-# install_plist GENERATOR DESTINATION LABEL
-install_plist() {
-    local tmp
-    tmp="$(/usr/bin/mktemp)" || return 1
-    "$1" > "$tmp" && /usr/bin/plutil -lint "$tmp" >/dev/null &&
-        /usr/bin/install -m 0644 -o root -g wheel "$tmp" "$2"
-    local status=$?
-    /bin/rm -f "$tmp"
-    [ "$status" -eq 0 ] || return 1
-    run /bin/launchctl enable "system/$3" &&
-        run /bin/launchctl bootstrap system "$2"
-}
-
-# copy_files: the root-owned copy of the script, and the folder for the files it writes.
-copy_files() {
-    # shellcheck disable=SC2086 # INSTALL_OWNER is deliberately split into options
-    /usr/bin/install -d -m 0755 $INSTALL_OWNER "$DIR" "$STATE_DIR" &&
-        /usr/bin/install -m 0755 $INSTALL_OWNER "$SCRIPT_DIR/tailscale-verge.sh" "$SCRIPT"
-}
-
-install_main() {
-    local started user
-    step_log BEGIN "Install Tailscale → Clash Verge services"
-    [ -f "$SCRIPT_DIR/tailscale-verge.sh" ] || { echo "error: tailscale-verge.sh is missing next to daemon.sh." >&2; return 1; }
-    user=$(target_user) || user=""
-    preflight_report
-    bootout_wait "$HTTP_LABEL" || return 1
-    bootout_wait "$LABEL" || return 1
-    step_log BEGIN "Copy root-owned service files"
-    copy_files || return 1
-    step_log END "Service files copied"
-    started=$(/bin/date +%s)
-    install_plist monitor_plist "$PLIST" "$LABEL" || { echo "error: could not load $LABEL." >&2; return 1; }
-    echo "Monitor installed and running ($LABEL)."
-    first_check "$started"
-    if [ -n "$user" ]; then
-        if install_grant "$user"; then
-            echo "Removal grant installed for $user ($GRANT): brew uninstall removes the daemon without a password."
-        fi
-        set_opt_out "$user" off || echo "warning: could not clear the opt-out marker in $user's home." >&2
-    else
-        echo "warning: no login user found, so the removal grant was not installed." >&2
-    fi
-    if port_accepts "$PORT"; then
-        echo "Port 127.0.0.1:$PORT is in use; stopping what holds it."
-        if ! stop_port_holders "$PORT"; then
-            /bin/rm -f "$HTTP_PLIST"
-            echo "Port 127.0.0.1:$PORT is still in use, so the responder was not installed." >&2
-            echo "Find the holder with: sudo lsof -nP -iTCP:$PORT -sTCP:LISTEN" >&2
-            return 3
-        fi
-    fi
-    install_plist http_plist "$HTTP_PLIST" "$HTTP_LABEL" || { echo "error: could not load $HTTP_LABEL." >&2; return 1; }
-    echo "Responder installed ($HTTP_LABEL): http://127.0.0.1:$PORT/provider.yaml"
-    step_log END "Service installation complete"
-}
-
-remove_main() {
-    bootout_wait "$HTTP_LABEL" || return 1
-    bootout_wait "$LABEL" || return 1
-    run /bin/launchctl enable "system/$HTTP_LABEL" >/dev/null 2>&1 || true   # clear a disable override
-    run /bin/launchctl enable "system/$LABEL" >/dev/null 2>&1 || true
-    /bin/rm -f "$HTTP_PLIST" "$PLIST" "$SCRIPT" \
-        "$STATE_DIR/provider.yaml" "$STATE_DIR/state" "$STATE_DIR"/.provider.yaml.* "$STATE_DIR"/.state.* || return 1
-    /bin/rmdir "$STATE_DIR" 2>/dev/null || true
-    /bin/rmdir "$DIR" 2>/dev/null || true
-    /bin/rm -f "$GRANT" || return 1
-    local user
-    if user=$(target_user) && set_opt_out "$user" on; then
-        echo "Tailscale → Clash Verge provider removed. It stays off when Homebrew reinstalls Exit IP Monitor; run install to turn it back on."
-    else
-        echo "Tailscale → Clash Verge provider removed."
-    fi
-}
-
-status_main() {
-    local label
-    for label in "$LABEL" "$HTTP_LABEL"; do
-        if /bin/launchctl print "system/$label" >/dev/null 2>&1; then
-            echo "$label: loaded"
+restore_installation() {
+    local path result=0
+    unload "$LABEL" || return 1
+    for path in "${installed_files[@]}"; do
+        if [ -f "$stage/backup/$(basename "$path")" ]; then
+            /bin/cp -p "$stage/backup/$(basename "$path")" "$path" || result=1
         else
-            echo "$label: not loaded"
+            /bin/rm -f "$path" || result=1
         fi
     done
-    preflight_report
-    if [ -f "$GRANT" ]; then echo "Removal grant: $GRANT"; else echo "Removal grant: not installed"; fi
-    local user home
-    if user=$(target_user) && home=$(user_home "$user") && [ -e "$home/$OPT_OUT" ]; then
-        echo "Turned off by $user (reinstalls skip it): $home/$OPT_OUT"
-    fi
-    if [ -f "$STATE_DIR/state" ]; then
-        echo "--- $STATE_DIR/state"
-        /usr/bin/head -c 512 "$STATE_DIR/state"
-        echo "--- $STATE_DIR/provider.yaml"
-        /usr/bin/head -c 4096 "$STATE_DIR/provider.yaml" 2>/dev/null
-    fi
+    [ "$result" = 0 ] || return 1
+    if [ "$old_loaded" = 1 ]; then run /bin/launchctl bootstrap system "$PLIST" || return 1; fi
+    if [ "$legacy_loaded" = 1 ]; then run /bin/launchctl bootstrap system "/Library/LaunchDaemons/$LEGACY.plist" || return 1; fi
+    if [ "$legacy_http_loaded" = 1 ]; then run /bin/launchctl bootstrap system "/Library/LaunchDaemons/$LEGACY-http.plist" || return 1; fi
 }
 
-daemon_main() {
-    case "${1:-}" in
-        install|remove)
-            [ "$(/usr/bin/id -u)" -eq 0 ] || { echo "error: run as root (sudo /bin/bash daemon.sh $1)." >&2; return 1; }
-            local log_dir=/Library/Logs/ExitIPMonitor log_file status
-            [ ! -L "$log_dir" ] || { echo "error: log directory is a symlink." >&2; return 1; }
-            /usr/bin/install -d -m 0755 -o root -g wheel "$log_dir" || return 1
-            log_file=$(new_step_log "$log_dir" "daemon-$1") || return 1
-            exec > >(/usr/bin/tee -a "$log_file") 2>&1
-            step_log INFO "Daemon action=$1 uid=$(/usr/bin/id -u); log: $log_file"
-            "$1_main"
-            status=$?
-            step_log END "Daemon action=$1 status=$status elapsed=${SECONDS}s; log: $log_file"
-            return "$status"
-            ;;
-        status) status_main ;;
-        *) echo "usage: daemon.sh install | remove | status" >&2; return 2 ;;
+finish_installation() {
+    local result=$1
+    if [ "$result" != 0 ] && [ "$mutation_started" = 1 ]; then
+        if restore_installation; then
+            echo 'Service installation failed; previous files and loaded services were restored.' >&2
+        else
+            echo "Service installation failed; recovery files were retained in $stage. Repair installation before continuing." >&2
+            /bin/rm -f "$DIR/Service/install.lock"
+            return
+        fi
+    fi
+    [ -z "$stage" ] || /bin/rm -rf "$stage"
+    /bin/rm -f "$DIR/Service/install.lock"
+}
+
+install_service() (
+    require_root || return 1
+    local binary="$SCRIPT_DIR/../MacOS/ExitIPMonitorDaemon" app stage="" owner=${SUDO_USER:-} path state
+    local mutation_started=0 old_loaded=0 legacy_loaded=0 legacy_http_loaded=0
+    local installed_files=("$EXECUTABLE" "$PLIST" "$MANAGER" "$DIR/command-support.sh" "$DIR/cleanup-installation.sh" "$DIR/installed-app" "$GRANT")
+    [ -x "$binary" ] || { echo 'Install from a built ExitIPMonitor.app bundle.' >&2; return 1; }
+    app=$(cd "$SCRIPT_DIR/../.." && pwd -P) || return 1
+    run /usr/bin/codesign --verify --deep --strict "$app" || return 1
+    run /usr/bin/codesign --verify --strict "$binary" || return 1
+    secure_directory /Library/PrivilegedHelperTools && secure_directory /Library/LaunchDaemons &&
+        secure_directory /etc/sudoers.d && secure_directory "$DIR" && secure_directory /Library/Logs/ExitIPMonitor || return 1
+    service_lock || return 1
+    trap 'finish_installation $?' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    for path in "${installed_files[@]}"; do
+        [ ! -L "$path" ] || { echo "Refusing symlink: $path" >&2; return 1; }
+        [ ! -e "$path" ] || { [ -f "$path" ] && [ "$(/usr/bin/stat -f %u "$path")" = 0 ]; } || return 1
+    done
+    stage=$(/usr/bin/mktemp -d "$DIR/Service/install.XXXXXXXX") || return 1
+    /bin/mkdir "$stage/backup" || return 1
+    for path in "${installed_files[@]}"; do
+        [ ! -f "$path" ] || /bin/cp -p "$path" "$stage/backup/$(basename "$path")" || return 1
+    done
+    /usr/bin/install -o root -g wheel -m 0755 "$binary" "$stage/new" || return 1
+    service_plist > "$stage/service.plist" || return 1
+    /usr/bin/plutil -lint "$stage/service.plist" || return 1
+    for path in "$LABEL" "$LEGACY" "$LEGACY-http"; do
+        state=0; job_state "$path" || state=$?
+        [ "$state" != 2 ] || return 1
+        if [ "$state" = 0 ]; then
+            case "$path" in "$LABEL") old_loaded=1 ;; "$LEGACY") legacy_loaded=1 ;; *) legacy_http_loaded=1 ;; esac
+        fi
+    done
+    if [ -f "/Library/LaunchDaemons/$LEGACY.plist" ]; then /usr/bin/touch "$DIR/legacy-provider-enabled" || return 1; fi
+    mutation_started=1
+    unload "$LEGACY-http" && unload "$LEGACY" && unload "$LABEL" || return 1
+    wait_legacy_workers || return 1
+    /bin/mv -f "$stage/new" "$EXECUTABLE" || return 1
+    /usr/bin/install -o root -g wheel -m 0644 "$stage/service.plist" "$PLIST" || return 1
+    /usr/bin/install -o root -g wheel -m 0755 "${BASH_SOURCE[0]}" "$MANAGER" || return 1
+    /usr/bin/install -o root -g wheel -m 0644 "$SCRIPT_DIR/command-support.sh" "$DIR/command-support.sh" || return 1
+    /usr/bin/install -o root -g wheel -m 0644 "$SCRIPT_DIR/cleanup-installation.sh" "$DIR/cleanup-installation.sh" || return 1
+    printf '%s\n' "$app" > "$DIR/installed-app" || return 1
+    /bin/chmod 0600 "$DIR/installed-app" || return 1
+    run "$EXECUTABLE" --install-right || return 1
+    run /bin/launchctl enable "system/$LABEL" || return 1
+    run /bin/launchctl bootstrap system "$PLIST" && run "$EXECUTABLE" --check-service || return 1
+    # A narrowly scoped, root-owned uninstaller preserves passwordless Homebrew removal.
+    if [ -z "$owner" ] || [ "$owner" = root ]; then owner=$(/usr/bin/stat -f %Su /dev/console); fi
+    if [[ "$owner" =~ ^[A-Za-z0-9._-]+$ ]] && [ "$owner" != root ] && [ "$owner" != loginwindow ]; then
+        printf '%s ALL=(root) NOPASSWD: %s uninstall\n' "$owner" "$MANAGER" > "$stage/grant" || return 1
+        /usr/sbin/visudo -cf "$stage/grant" && /usr/bin/install -o root -g wheel -m 0440 "$stage/grant" "$GRANT" || return 1
+    fi
+    mutation_started=0
+    /bin/rm -f "/Library/LaunchDaemons/$LEGACY.plist" "/Library/LaunchDaemons/$LEGACY-http.plist" "/etc/sudoers.d/exitipmonitor-tailscale-verge" "$DIR/tailscale-verge.sh" || return 1
+    echo 'Service installed. Open Exit IP to import shared settings once. The service starts at every boot.'
+)
+
+uninstall_service() (
+    require_root || return 1
+    local app
+    service_lock || return 1
+    trap '/bin/rm -f "$DIR/Service/install.lock"' EXIT
+    if [ -f "$DIR/installed-app" ]; then
+        IFS= read -r app < "$DIR/installed-app"
+        case "$app" in /*/ExitIPMonitor.app) ;; *) return 1 ;; esac
+        source "$DIR/cleanup-installation.sh"
+        cleanup_app=$app cleanup_uid=0 cleanup_translocations="" cleanup_matches=()
+        cleanup_stop_app || return 1
+    fi
+    unload "$LABEL" && unload "$LEGACY-http" && unload "$LEGACY" || return 1
+    wait_legacy_workers || return 1
+    if [ -n "${app:-}" ]; then
+        cleanup_find_processes || return 1
+        [ "${#cleanup_matches[@]}" = 0 ] || { echo 'App restarted during removal. Quit it and retry.' >&2; return 1; }
+    fi
+    /bin/rm -f "$PLIST" "$EXECUTABLE" "/Library/LaunchDaemons/$LEGACY.plist" "/Library/LaunchDaemons/$LEGACY-http.plist" || return 1
+    /bin/rm -f "$DIR/TailscaleVerge/provider.yaml" "$DIR/TailscaleVerge/state" "$DIR/tailscale-verge.sh" || return 1
+    /bin/rm -f "$GRANT" "/etc/sudoers.d/exitipmonitor-tailscale-verge" "$MANAGER" || return 1
+    echo 'Service removed. Shared settings, credentials, profiles and logs were retained.'
+)
+
+main() {
+    [ "$#" = 1 ] || return 2
+    case "$1" in
+        install) install_service ;;
+        remove|uninstall) uninstall_service ;;
+        status) /bin/launchctl print "system/$LABEL" ;;
+        *) echo 'Usage: daemon.sh install | status | uninstall' >&2; return 2 ;;
     esac
 }
-
-if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then
-    daemon_main "$@"
-    exit $?
-fi
+if [[ "${BASH_SOURCE[0]}" = "$0" ]]; then main "$@"; fi

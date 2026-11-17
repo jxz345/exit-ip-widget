@@ -1,10 +1,10 @@
 import Foundation
 
-/// The one description of when the app checks the exit IP. The dashboard, Settings, and the menu-bar
-/// popover all show this text, so they always agree with `PublicIPMonitor`'s triggers.
+/// The one description of when the daemon checks the exit IP. The dashboard and Settings
+/// share this text so they agree with the system monitoring engine.
 public enum MonitoringRules {
     public static func summary(interval: RefreshInterval) -> String {
-        "Checks \(interval.cadence), and right after a network, route, proxy, DNS, VPN/TUN, wake, or app-activation change."
+        "Checks \(interval.cadence), and right after a network, route, proxy, DNS, VPN/TUN change, or system wake."
     }
 }
 

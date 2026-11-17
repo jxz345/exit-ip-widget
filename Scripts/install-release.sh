@@ -132,7 +132,7 @@ fi
 bounded_command 60 copy ditto "$new_app" "$app_path" || fail "Could not copy the app to $install_dir.
 $app_management_hint"
 printf 'PASS  Installed: %s\n' "$app_path"
-printf 'Optional provider not installed. Use Install Provider in the dashboard when needed.\n'
+printf 'Open the dashboard and choose Install Service to enable shared background monitoring.\n'
 
 if /bin/bash "$app_path/Contents/Resources/diagnose-launch.sh" --app "$app_path" --launch --timeout 60; then
     step_log PASS "Exit IP Monitor completed startup and its main thread is responding."

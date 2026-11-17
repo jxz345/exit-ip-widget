@@ -13,9 +13,9 @@ final class EventLogLineTests: XCTestCase {
     }
 
     func testLinesStartWithAUTCStamp() {
-        XCTAssertEqual(line("monitor_started"), "2026-10-18 13:28:56Z  App started")
+        XCTAssertEqual(line("monitor_started"), "2026-10-18 13:28:56Z  Monitoring started")
         XCTAssertEqual(EventLogLine.format(timestamp: "2026-10-18T13:28:56.123Z", event: "monitor_stopped", fields: [:]),
-                       "2026-10-18 13:28:56Z  App quit")
+                       "2026-10-18 13:28:56Z  Monitoring stopped")
     }
 
     func testChecksNameTheirTriggerAndProvider() {
@@ -25,7 +25,7 @@ final class EventLogLineTests: XCTestCase {
                        "Check · Refresh now · ipapi.co")
         XCTAssertEqual(EventLogLine.message(event: "refresh_requested", fields: ["trigger": "periodic", "provider": "ipapiIs"]),
                        "Check · timer · ipapi.is")
-        for (raw, phrase) in [("startup", "app start"), ("network_path", "network path changed"),
+        for (raw, phrase) in [("startup", "service start"), ("network_path", "network path changed"),
                               ("network_configuration", "network settings changed"), ("system_wake", "Mac woke"),
                               ("screens_wake", "screen woke"), ("session_active", "session active"),
                               ("app_active", "app activated"), ("trailing", "follow-up after events"),
@@ -40,7 +40,7 @@ final class EventLogLineTests: XCTestCase {
         XCTAssertEqual(message("lookup_succeeded", ["provider": "ipWhois", "country": "SG"]), "Lookup OK · IPWHOIS.io · SG")
         XCTAssertEqual(message("lookup_failed", ["provider": "ipapiCo", "message": "timed out"]), "Lookup failed · ipapi.co · timed out")
         // The dashboard no longer shows installation details, so the line doesn't point there.
-        XCTAssertEqual(message("daemon_install_failed", ["log": "/tmp/daemon-setup.log"]), "Provider installation failed")
+        XCTAssertEqual(message("daemon_install_failed", ["log": "/tmp/daemon-setup.log"]), "Service installation failed")
         XCTAssertEqual(message("refresh_skipped", ["trigger": "app_active", "reason": "fresh"]),
                        "Skipped · app activated · result under 2 min old")
         XCTAssertEqual(message("refresh_skipped", ["trigger": "screens_wake", "reason": "event_window"]),
@@ -66,7 +66,7 @@ final class EventLogLineTests: XCTestCase {
         XCTAssertEqual(message("keychain_operation", ["operation": "load", "outcome": "started", "duration_ms": "0"]),
                        "Keychain load · started")
         XCTAssertEqual(message("refresh_skipped", ["trigger": "startup", "reason": "token_unavailable"]),
-                       "Skipped · app start · load or save the IPinfo token in Settings")
+                       "Skipped · service start · import or save the shared IPinfo token in Settings")
     }
 
     func testTailscaleProviderLines() {
@@ -117,7 +117,7 @@ final class EventLogLineTests: XCTestCase {
 
     func testMonitoringSummaryDescribesTimerAndEvents() {
         XCTAssertEqual(MonitoringRules.summary(interval: .fifteenMinutes),
-                       "Checks every 15 minutes, and right after a network, route, proxy, DNS, VPN/TUN, wake, or app-activation change.")
+                       "Checks every 15 minutes, and right after a network, route, proxy, DNS, VPN/TUN change, or system wake.")
         XCTAssertTrue(MonitoringRules.summary(interval: .sixtyMinutes).hasPrefix("Checks every hour, and right after"))
         for interval in RefreshInterval.allCases {
             XCTAssertFalse(MonitoringRules.summary(interval: interval).contains("recommended"))
@@ -150,7 +150,7 @@ final class EventLogBufferTests: XCTestCase {
         XCTAssertFalse(buffer.append(timestamp: "2026-10-18T13:07:05Z", event: "widget_reload_requested", fields: [:]))
         XCTAssertEqual(buffer.lines, [
             "2026-10-18 13:00:00Z  Tailscale provider · Direct utun7",
-            "2026-10-18 13:06:00Z  App started",
+            "2026-10-18 13:06:00Z  Monitoring started",
             "2026-10-18 13:07:00Z  Tailscale provider · Reject (Tailscale isn't connected)",
             "2026-10-18 13:07:04Z  Tailscale provider · Direct utun7"
         ])

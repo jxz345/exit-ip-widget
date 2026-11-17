@@ -434,6 +434,26 @@ final class ExitIPSharedTests: XCTestCase {
         XCTAssertEqual(budget.callsToday(for: .ipapiCo, now: now), 1)
     }
 
+    func testManualRefreshBypassesSpacingButHonorsCooldownAndDailyBudget() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var budget = LookupBudget(now: now)
+        let pausedUntil = now.addingTimeInterval(60)
+        for _ in 0..<Int(LookupBudget.burstCapacity) { _ = budget.admit(.manual, lastSuccess: nil, now: now) }
+        func decide(cooldowns: [ProviderID: Date] = [:]) -> RefreshGate.Decision {
+            RefreshGate.decide(
+                urgency: .manual, pool: [.ipapiIs], preferred: .ipapiIs,
+                lastAttempts: [.ipapiIs: now], cooldowns: cooldowns, budget: &budget,
+                lastSuccess: now, bypassLimits: true, now: now
+            )
+        }
+        XCTAssertEqual(decide(), .run(provider: .ipapiIs, rotatedFrom: nil))
+        XCTAssertEqual(budget.callsToday(for: .ipapiIs, now: now), 1)
+        XCTAssertEqual(decide(cooldowns: [.ipapiIs: pausedUntil]), .allProvidersPaused(until: pausedUntil))
+        XCTAssertEqual(budget.callsToday(for: .ipapiIs, now: now), 1)
+        for _ in 1..<LookupBudget.dailyBudget(for: .ipapiIs)! { budget.recordCall(to: .ipapiIs, now: now) }
+        XCTAssertEqual(decide(), .dailyBudgetExhausted(resetAt: LookupBudget.budgetResetDate(after: now)))
+    }
+
     func testRefreshGateSkipsExhaustedProvidersAndPausesWhenAllAreExhausted() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         var budget = LookupBudget(now: now)

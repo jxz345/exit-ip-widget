@@ -83,12 +83,12 @@ public struct AllowedIPList: Codable, Equatable, Sendable {
 }
 
 public final class AllowedIPStore: @unchecked Sendable {
-    private let defaults: UserDefaults
+    private let defaults: any PreferenceStorage
     private let key: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    public init(defaults: UserDefaults = ExitIPAppGroup.defaults, key: String = ExitIPPreferenceKey.allowedIPs) {
+    public init(defaults: any PreferenceStorage = ExitIPAppGroup.defaults, key: String = ExitIPPreferenceKey.allowedIPs) {
         self.defaults = defaults
         self.key = key
     }

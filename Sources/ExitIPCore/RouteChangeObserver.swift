@@ -1,3 +1,6 @@
+#if SWIFT_PACKAGE
+import ExitIPShared
+#endif
 import Darwin
 import Foundation
 

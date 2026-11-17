@@ -1,11 +1,12 @@
 #!/bin/bash
 # Installer package postinstall: launch the installed app for the logged-in user. Its dashboard
 # opens on first launch. Installer passes the install destination (e.g. /Applications) as $2.
-# Never fails the installation.
+# Service setup must succeed before the package reports a completed installation.
 app="$2/ExitIPMonitor.app"
 [ -d "$app" ] || app="${3%/}/Applications/ExitIPMonitor.app"
 [ -d "$app" ] || exit 0
 source "$app/Contents/Resources/command-support.sh"
+bounded_command 120 install-service /bin/bash "$app/Contents/Resources/daemon.sh" install || exit 1
 step_log INFO "Package installed: $app. Requesting launch; macOS approval may be required."
 
 if [ "$(id -u)" -eq 0 ]; then

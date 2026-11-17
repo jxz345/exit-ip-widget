@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 @MainActor
 enum SingleInstanceController {
@@ -19,7 +20,7 @@ enum SingleInstanceController {
                 reopenExisting(bundleID: bundleID)
                 return false
             }
-            // Older releases do not own the lock. Respect an already-running legacy copy too.
+            // Older releases do not own the lock. Respect a legacy copy belonging to this user too.
             if let existing = existingApplication(bundleID: bundleID) {
                 reopenExisting(bundleID: bundleID, application: existing)
                 withExtendedLifetime(lock) {}
@@ -27,7 +28,7 @@ enum SingleInstanceController {
             }
             instanceLock = lock
             observer = DistributedNotificationCenter.default().addObserver(
-                forName: reopenNotification, object: bundleID, queue: .main
+                forName: reopenNotification, object: reopenObject(bundleID: bundleID), queue: .main
             ) { _ in
                 MainActor.assumeIsolated {
                     RuntimeLog.shared.info("duplicate_launch_reopened")
@@ -57,14 +58,27 @@ enum SingleInstanceController {
     private static func existingApplication(bundleID: String) -> NSRunningApplication? {
         NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
             .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier && $0.isFinishedLaunching && !$0.isTerminated }
+            .filter { isCurrentUserProcess($0.processIdentifier) }
             .sorted { ($0.launchDate ?? .distantFuture) < ($1.launchDate ?? .distantFuture) }
             .first
+    }
+
+    static func isCurrentUserProcess(_ pid: pid_t) -> Bool {
+        guard pid > 0 else { return false }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return false }
+        return info.pbi_uid == getuid()
+    }
+
+    static func reopenObject(bundleID: String, userID: uid_t = getuid()) -> String {
+        "\(bundleID).\(userID)"
     }
 
     private static func reopenExisting(bundleID: String, application: NSRunningApplication? = nil) {
         RuntimeLog.shared.info("duplicate_instance_blocked", fields: ["pid": String(ProcessInfo.processInfo.processIdentifier)])
         DistributedNotificationCenter.default().postNotificationName(
-            reopenNotification, object: bundleID, userInfo: nil, deliverImmediately: true
+            reopenNotification, object: reopenObject(bundleID: bundleID), userInfo: nil, deliverImmediately: true
         )
         if let existing = application ?? existingApplication(bundleID: bundleID) {
             if let url = existing.bundleURL { NSWorkspace.shared.open(url) }

@@ -16,8 +16,17 @@ public enum EventLogLine {
     public static func message(event: String, fields: [String: String]) -> String? {
         let provider = providerName(fields["provider"])
         switch event {
-        case "monitor_started": return "App started"
-        case "monitor_stopped": return "App quit"
+        case "monitor_started": return "Monitoring started"
+        case "monitor_stopped": return "Monitoring stopped"
+        case "daemon_ready": return "Background service ready"
+        case "daemon_stopped": return "Background service stopped"
+        case "daemon_client_started": return "Menu-bar app opened"
+        case "daemon_client_stopped": return "Menu-bar app quit"
+        case "shared_settings_initialized": return "Shared settings imported"
+        case "shared_settings_changed": return "Shared settings changed"
+        case "shared_credential_changed": return "Shared credential updated"
+        case "daemon_storage_failed": return "Service could not save state"
+        case "provider_listener_failed": return "Tailscale provider listener unavailable"
         case "keychain_operation":
             return "Keychain \(fields["operation"] ?? "operation") · \(fields["outcome"] ?? "unknown")"
         case "duplicate_launch_reopened": return "Existing app reopened · duplicate launch prevented"
@@ -61,10 +70,10 @@ public enum EventLogLine {
             return "Error shown" + detail(fields["message"])
         case "error_cleared": return "Error cleared"
         case "clash_profile_written": return "Clash Verge profile written"
-        case "daemon_install_started": return "Provider installation started · awaiting macOS authentication"
-        case "daemon_install_succeeded": return "Provider installed · both background services loaded"
-        case "daemon_install_cancelled": return "Provider installation cancelled"
-        case "daemon_install_failed": return "Provider installation failed"
+        case "daemon_install_started": return "Service installation started · awaiting macOS authentication"
+        case "daemon_install_succeeded": return "Service installed · background monitoring available"
+        case "daemon_install_cancelled": return "Service installation cancelled"
+        case "daemon_install_failed": return "Service installation failed"
         case "clash_profile_write_failed":
             return "Clash Verge profile not written" + detail(fields["error"])
         case "clash_profile_copy_written":
@@ -98,7 +107,7 @@ public enum EventLogLine {
 
     static func trigger(_ raw: String?) -> String {
         switch raw {
-        case "startup": "app start"
+        case "startup": "service start"
         case "manual": "Refresh now"
         case "periodic": "timer"
         case "network_path": "network path changed"
@@ -124,7 +133,7 @@ public enum EventLogLine {
         case "fresh": "result under 2 min old"
         case "event_window": "absorbed by the check just run"
         case "burst_budget": "burst budget empty"
-        case "token_unavailable": "load or save the IPinfo token in Settings"
+        case "token_unavailable": "import or save the shared IPinfo token in Settings"
         case let other?: other.replacingOccurrences(of: "_", with: " ")
         case nil: "?"
         }

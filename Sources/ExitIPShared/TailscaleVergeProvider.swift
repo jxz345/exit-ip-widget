@@ -47,8 +47,8 @@ public enum TailscaleVergeChange {
 
 /// What the responder serves right now, derived from the monitor's `state` file with the responder's
 /// rules (tailscale-verge.sh `load_state`): any missing, malformed, or stale state means Reject.
-public struct TailscaleVergeStatus: Equatable, Sendable {
-    public enum Served: Equatable, Sendable {
+public struct TailscaleVergeStatus: Codable, Equatable, Sendable {
+    public enum Served: Codable, Equatable, Sendable {
         case direct(interface: String)
         case reject(reason: String)
     }

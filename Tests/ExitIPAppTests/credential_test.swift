@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 
 /// Native integration checks compile the real app with a separate entry point and isolated defaults.
@@ -13,6 +14,20 @@ enum CredentialAppTests {
         let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 
+        require(SingleInstanceController.isCurrentUserProcess(getpid()), "The current user's process must match")
+        require(!SingleInstanceController.isCurrentUserProcess(-1), "An unknown process must not block this user")
+        if getuid() != 0 {
+            require(!SingleInstanceController.isCurrentUserProcess(1), "Another user's process must not block this user")
+        }
+        let bundleID = "com.example.exitipmonitor"
+        require(SingleInstanceController.reopenObject(bundleID: bundleID) ==
+                SingleInstanceController.reopenObject(bundleID: bundleID, userID: getuid()),
+                "Reopen requests must target the current user")
+        require(SingleInstanceController.reopenObject(bundleID: bundleID, userID: 501) !=
+                SingleInstanceController.reopenObject(bundleID: bundleID, userID: 502),
+                "Different users must have separate reopen notifications")
+        print("PASS: duplicate process checks and reopen notifications are scoped to the current user")
+
         defaults.removePersistentDomain(forName: ExitIPAppGroup.identifier)
         MonitoringPreferences(provider: .ipinfoLite, providerPool: [.ipinfoLite]).save()
         let oldSnapshot = snapshot(.ipWhois)
@@ -20,7 +35,7 @@ enum CredentialAppTests {
         let backend = MemoryCredentials()
         let credentials = CredentialSession(service: CredentialService(backend: backend), account: "token")
         let client = RecordingClient()
-        let monitor = PublicIPMonitor(client: client, ipinfoCredentials: credentials)
+        let monitor = MonitoringEngine(observeSystem: false, client: client, ipinfoCredentials: credentials)
         monitor.start()
         try await settle()
         require(monitor.status == .waitingForIPinfoToken, "IPinfo-only startup must wait for an explicit load")
@@ -39,8 +54,11 @@ enum CredentialAppTests {
             try render(ClashVergeProfileSection(providerInstalled: false, credentials: profile),
                        size: NSSize(width: 500, height: 640), dark: dark,
                        to: output.appendingPathComponent("profile-\(mode).png"))
-            try render(SettingsView(monitor: monitor), size: NSSize(width: 560, height: 1300), dark: dark,
+            try render(SettingsView(monitor: PublicIPMonitor()), size: NSSize(width: 560, height: 1300), dark: dark,
                        to: output.appendingPathComponent("settings-\(mode).png"))
+            try render(BackgroundServiceSection(monitor: PublicIPMonitor(), installer: DaemonInstallationModel()),
+                       size: NSSize(width: 640, height: 270), dark: dark,
+                       to: output.appendingPathComponent("service-\(mode).png"))
         }
         try await settle()
         require(backend.calls.isEmpty, "Rendering Settings and the dashboard must not read the IPinfo token")
@@ -64,9 +82,17 @@ enum CredentialAppTests {
         let loadedCalls = await client.calls
         require(!loadedCalls.isEmpty && loadedCalls.allSatisfy { $0.provider == .ipinfoLite && $0.ipinfoToken == "test-token" },
                 "Automatic monitoring must use the loaded token")
+        let manualAttempt = Date()
+        RefreshAttemptStore().recordAttempt(for: .ipinfoLite, at: manualAttempt)
+        await monitor.refresh(force: true, bypassMinimumInterval: true, trigger: .manual)
+        require(await client.calls.count == loadedCalls.count + 1, "Refresh now must call a single provider immediately inside its gap")
+        require(monitor.status == .ready && (monitor.snapshot?.checkedAt ?? .distantPast) >= manualAttempt,
+                "Refresh now must publish the fresh result")
+        print("PASS: Refresh now calls the provider and updates the snapshot immediately inside the five-second gap")
+        let manualCalls = await client.calls.count
         await monitor.testProvider(.ipinfoLite)
         require(backend.calls == ["read"], "Subsequent lookup must use memory")
-        require(await client.calls.count > loadedCalls.count, "Provider Test must use the loaded token")
+        require(await client.calls.count > manualCalls, "Provider Test must use the loaded token")
 
         let countBeforeRemoval = await client.calls.count
         require(await monitor.removeIPinfoToken(), "Explicit Remove should succeed")
@@ -89,7 +115,7 @@ enum CredentialAppTests {
         MonitoringPreferences(provider: .ipinfoLite, providerPool: [.ipinfoLite, .ipWhois]).save()
         let mixedBackend = MemoryCredentials()
         let mixedClient = RecordingClient()
-        let mixed = PublicIPMonitor(client: mixedClient, ipinfoCredentials:
+        let mixed = MonitoringEngine(observeSystem: false, client: mixedClient, ipinfoCredentials:
             CredentialSession(service: CredentialService(backend: mixedBackend), account: "token"))
         mixed.start()
         try await settle()
